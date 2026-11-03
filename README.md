@@ -37,7 +37,3 @@ swift tools/ps4-linux-test.swift
 ## License
 
 GPL-3.0 — see [LICENSE](LICENSE). Incorporates GPLv3 lineage from community PS4 homebrew loader UI patterns; see file headers in `ps4-linux-launcher-app/linux-loader/`.
-
-## Contributors
-
-See [CONTRIBUTORS.md](CONTRIBUTORS.md).
