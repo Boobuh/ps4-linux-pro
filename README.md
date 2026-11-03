@@ -26,6 +26,7 @@ Install **`ps4-linux-launcher-app/linux-loader/PS4-Linux-v*.pkg`** on the consol
 | [docs/PS4-LINUX-XMB-LAUNCH.md](docs/PS4-LINUX-XMB-LAUNCH.md) | Library launch flow |
 | [docs/PS4-LINUX-PAYLOAD-LAUNCH.md](docs/PS4-LINUX-PAYLOAD-LAUNCH.md) | Payload / PayLoader fallback |
 | [docs/PS4-LINUX-AUTO.md](docs/PS4-LINUX-AUTO.md) | Initramfs / auto-install notes |
+| [docs/cursor-chats/README.md](docs/cursor-chats/README.md) | Archived Cursor chats + sidebar restore |
 
 ## Tests
 

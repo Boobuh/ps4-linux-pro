@@ -1,0 +1,14 @@
+---
+description: Prior Cursor chat context for PS4 Linux Pro lives in docs/cursor-chats
+alwaysApply: true
+---
+
+# Chat history archive
+
+This repo was split from `cursor-setup`. Long-running PS4 Linux decisions are archived under **`docs/cursor-chats/`**:
+
+- **`PS4-LINUX-THREAD.md`** — PS4-focused export (prefer this for context).
+- **`raw/*.jsonl`** — full agent transcript if you need exact wording or line references.
+- **`README.md`** — how to re-link the composer in Cursor (`tools/ps4-linux-cursor-chats-migrate.swift install-local`).
+
+When the user refers to “what we decided before” or earlier PKG/debug work, grep or read those files before guessing.
