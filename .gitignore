@@ -1,0 +1,28 @@
+# Build / OpenOrbis
+vendor/
+**/build/
+**/*.pkg
+**/pkg.gp4
+**/eboot.bin
+**/guest.elf
+**/sce_sys/param.sfo
+**/.pkg-app-ver
+**/.pkg-master-ver
+
+# Swift PM
+**/.build/
+**/.swiftpm/
+
+# Mac / IDE
+.DS_Store
+.idea/
+.vscode/
+
+# Secrets
+.env
+.env.*
+*.pem
+credentials.json
+
+# Large downloads (sync tool fetches these)
+downloads/

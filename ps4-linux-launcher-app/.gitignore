@@ -1,0 +1,4 @@
+linux-loader/build/
+linux-loader/*.pkg
+linux-loader/pkg.gp4
+vendor/
