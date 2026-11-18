@@ -49,7 +49,8 @@ public:
   bool IsReady() const { return m_Ready; }
 
   // General
-  void WaitFlip();
+  /// Pass flip arg of the last submitted frame to wait on (−1 = first frame, no wait).
+  void WaitFlip(int64_t waitUntilFlipArg = -1);
   void SwapBuffer(int p_FlipArgs);
 
   // Used for setting dimensions
@@ -133,6 +134,7 @@ private:
   int64_t *m_FlipArgLog;
 
   bool m_Ready;
+  int m_SubmittedFlipCount;
 };
 
 #endif

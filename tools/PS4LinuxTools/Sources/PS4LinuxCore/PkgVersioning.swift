@@ -3,17 +3,26 @@ import Foundation
 public struct PkgVersioning {
     public struct BumpResult: Equatable {
         public var display: String
+        /// Written to both APP_VER and VERSION in param.sfo (GoldHEN homebrew pattern).
         public var sonyAppVer: String
         public var masterVersion: String
         public var buildLabel: String
     }
 
+    /// Single Sony `XX.YY` string for **both** param.sfo version fields (matches OpenOrbis homebrew / GoldHEN PKGs).
+    public static func homebrewSfoVersion(buildNum: Int) -> String {
+        if buildNum >= 80 {
+            return String(format: "02.%02d", buildNum - 69)
+        }
+        return String(format: "%02d.%02d", buildNum / 100, buildNum % 100)
+    }
+
     public static func sonyAppVer(buildNum: Int) -> String {
-        String(format: "%02d.%02d", buildNum / 100, buildNum % 100)
+        homebrewSfoVersion(buildNum: buildNum)
     }
 
     public static func masterVersion(buildNum: Int) -> String {
-        String(format: "01.%d", buildNum)
+        homebrewSfoVersion(buildNum: buildNum)
     }
 
     public static func versionedPkgFileName(display: String, buildLabel: String, sonyAppVer: String) -> String {
@@ -21,7 +30,6 @@ public struct PkgVersioning {
         return "PS4-Linux-v\(display)-b\(buildLabel)-APP\(appDigits).pkg"
     }
 
-    /// Parses PKG_VERSION + PKG_BUILD_NUM and optionally bumps patch + build counter.
     public static func bump(
         displayRaw: String,
         buildNumRaw: String?,
@@ -51,13 +59,8 @@ public struct PkgVersioning {
 
         let display = "\(parts[0]).\(parts[1]).\(parts[2])"
         let buildLabel = String(buildNum)
-        let appVer = sonyAppVer(buildNum: buildNum)
-        let master = masterVersion(buildNum: buildNum)
-        return BumpResult(display: display, sonyAppVer: appVer, masterVersion: master, buildLabel: buildLabel)
-    }
-
-    public static func appVerDiffersFromMaster(_ appVer: String, _ master: String) -> Bool {
-        appVer != master
+        let unified = homebrewSfoVersion(buildNum: buildNum)
+        return BumpResult(display: display, sonyAppVer: unified, masterVersion: unified, buildLabel: buildLabel)
     }
 
     public static func appVerFitsParamSfo(_ appVer: String) -> Bool {

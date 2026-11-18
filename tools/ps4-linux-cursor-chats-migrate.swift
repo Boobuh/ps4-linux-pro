@@ -11,6 +11,9 @@ let rawTranscript = repoRoot
 let composerID = "bc0c13b6-bead-4a8f-978b-45a231b3c41e"
 let cursorProjectSlug = "Users-Shared-dev-ps4-linux-pro"
 let workspaceFolder = "file:///Users/Shared/dev/ps4-linux-pro"
+let workspaceFolderPath = "/Users/Shared/dev/ps4-linux-pro"
+let setupWorkspaceFolder = "file:///Users/Shared/dev/cursor-setup"
+let setupCursorProjectSlug = "Users-Shared-dev-cursor-setup"
 
 struct ComposerMeta: Codable {
     var selectedComposerIds: [String]
@@ -30,6 +33,10 @@ func usage() -> Never {
 
           swift tools/\(me) status
             Show whether local Cursor project + workspace DB are wired.
+
+          swift tools/\(me) copy-workspace-from-setup
+            Copy composer sidebar state from the cursor-setup workspace into ps4-linux-pro
+            (workspaceStorage composer keys + agent-transcripts, re-home composer ids).
 
         Archived chats live under docs/cursor-chats/ (also in git).
         Cursor does not import sidebar history from git alone — run install-local after opening this repo.
@@ -61,7 +68,12 @@ func workspaceStorageRoot() -> URL {
         .appendingPathComponent("Library/Application Support/Cursor/User/workspaceStorage", isDirectory: true)
 }
 
-func findWorkspaceDB(for folderURI: String) -> URL? {
+func globalStorageDB() -> URL {
+    FileManager.default.homeDirectoryForCurrentUser
+        .appendingPathComponent("Library/Application Support/Cursor/User/globalStorage/state.vscdb")
+}
+
+func findWorkspaceDB(for folderURI: String) -> (db: URL, storageId: String)? {
     guard let entries = try? FileManager.default.contentsOfDirectory(
         at: workspaceStorageRoot(),
         includingPropertiesForKeys: nil
@@ -72,9 +84,42 @@ func findWorkspaceDB(for folderURI: String) -> URL? {
               let text = String(data: data, encoding: .utf8),
               text.contains(folderURI)
         else { continue }
-        return entry.appendingPathComponent("state.vscdb")
+        return (entry.appendingPathComponent("state.vscdb"), entry.lastPathComponent)
     }
     return nil
+}
+
+/// Cursor lists chats per workspace; archived threads from cursor-setup must be re-homed here.
+func patchGlobalComposerWorkspace(storageId: String) -> Bool {
+    let db = globalStorageDB()
+    guard FileManager.default.fileExists(atPath: db.path) else { return false }
+
+    // composerData JSON is large; sqlite3 CLI quoting can hang — use Python + busy_timeout.
+    let py = """
+    import json, sqlite3, sys
+    db, cid, sid, folder, uri = sys.argv[1:6]
+    conn = sqlite3.connect(db, timeout=30)
+    conn.execute("PRAGMA busy_timeout=30000")
+    key = f"composerData:{cid}"
+    row = conn.execute("SELECT value FROM cursorDiskKV WHERE key=?", (key,)).fetchone()
+    if not row:
+        sys.exit(1)
+    doc = json.loads(row[0])
+    doc["workspaceIdentifier"] = {
+        "id": sid,
+        "uri": {"$mid": 1, "fsPath": folder, "external": uri, "path": folder, "scheme": "file"},
+    }
+    conn.execute(
+        "INSERT OR REPLACE INTO cursorDiskKV (key, value) VALUES (?, ?)",
+        (key, json.dumps(doc, separators=(",", ":"))),
+    )
+    conn.commit()
+    """
+    let (status, _) = runShell(
+        "/usr/bin/python3",
+        ["-c", py, db.path, composerID, storageId, workspaceFolderPath, workspaceFolder]
+    )
+    return status == 0
 }
 
 @discardableResult
@@ -143,13 +188,146 @@ func cmdStatus() {
         .appendingPathComponent("agent-transcripts/\(composerID)/\(composerID).jsonl")
     print("repo raw transcript:", rawTranscript.path, FileManager.default.fileExists(atPath: rawTranscript.path) ? "ok" : "MISSING")
     print("local agent transcript:", transcript.path, FileManager.default.fileExists(atPath: transcript.path) ? "ok" : "missing")
-    if let db = findWorkspaceDB(for: workspaceFolder) {
-        print("workspace state.vscdb:", db.path, "found")
-        let (_, value) = runShell("/usr/bin/sqlite3", [db.path, "SELECT value FROM ItemTable WHERE key='composer.composerData';"])
+    if let ws = findWorkspaceDB(for: workspaceFolder) {
+        print("workspace state.vscdb:", ws.db.path, "found (id \(ws.storageId))")
+        let (_, value) = runShell("/usr/bin/sqlite3", [ws.db.path, "SELECT value FROM ItemTable WHERE key='composer.composerData';"])
         print("composer.composerData:", value.trimmingCharacters(in: .whitespacesAndNewlines))
     } else {
         print("workspace state.vscdb: not found — open \(repoRoot.path) in Cursor once, then re-run install-local")
     }
+
+    let globalDB = globalStorageDB()
+    let py = """
+    import json, sqlite3, sys
+    db, cid = sys.argv[1], sys.argv[2]
+    conn = sqlite3.connect(db, timeout=5)
+    row = conn.execute("SELECT value FROM cursorDiskKV WHERE key=?", (f"composerData:{cid}",)).fetchone()
+    if not row:
+        print("missing")
+    else:
+        wid = json.loads(row[0]).get("workspaceIdentifier") or {}
+        print(wid.get("id", "nil"))
+    """
+    let (_, widOut) = runShell("/usr/bin/python3", ["-c", py, globalDB.path, composerID])
+    print("global workspaceIdentifier.id:", widOut.trimmingCharacters(in: .whitespacesAndNewlines))
+}
+
+func cmdCopyWorkspaceFromSetup() throws {
+    guard let setupWS = findWorkspaceDB(for: setupWorkspaceFolder),
+          let ps4WS = findWorkspaceDB(for: workspaceFolder)
+    else {
+        fputs("Open cursor-setup and ps4-linux-pro in Cursor once so both workspace DBs exist.\n", stderr)
+        exit(1)
+    }
+
+    let py = """
+    import json, sqlite3, shutil, sys
+    from pathlib import Path
+
+    setup_db, ps4_db, global_db = map(Path, sys.argv[1:4])
+    ps4_id, ps4_folder, ps4_uri = sys.argv[4:7]
+    setup_transcripts, ps4_transcripts = map(Path, sys.argv[7:9])
+
+    force_keys = [
+        "composer.composerData",
+        "workbench.parts.embeddedAuxBarEditor.state",
+        "workbench.backgroundComposer.workspacePersistentData",
+    ]
+
+    def connect(path):
+        conn = sqlite3.connect(path, timeout=30)
+        conn.execute("PRAGMA busy_timeout=30000")
+        return conn
+
+    setup_c = connect(setup_db)
+    ps4_c = connect(ps4_db)
+    copied = []
+    for key in force_keys:
+        row = setup_c.execute("SELECT value FROM ItemTable WHERE key=?", (key,)).fetchone()
+        if not row:
+            continue
+        val = row[0]
+        if key == "workbench.backgroundComposer.workspacePersistentData":
+            val = val.replace("/Users/Shared/dev/cursor-setup", ps4_folder)
+        ps4_c.execute("INSERT OR REPLACE INTO ItemTable (key, value) VALUES (?, ?)", (key, val))
+        copied.append(key)
+
+    for row in setup_c.execute(
+        "SELECT key, value FROM ItemTable WHERE value LIKE ? OR value LIKE ?",
+        ("%bc0c13b6-bead-4a8f-978b-45a231b3c41e%", "%a98e44e9-6539-4ecd-9635-10ae96c670ac%"),
+    ):
+        key, val = row
+        if key in copied:
+            continue
+        val = val.replace("/Users/Shared/dev/cursor-setup", ps4_folder)
+        ps4_c.execute("INSERT OR REPLACE INTO ItemTable (key, value) VALUES (?, ?)", (key, val))
+        copied.append(key)
+    ps4_c.commit()
+
+    meta = json.loads(
+        ps4_c.execute("SELECT value FROM ItemTable WHERE key='composer.composerData'").fetchone()[0]
+    )
+    composer_ids = list(
+        dict.fromkeys(meta.get("selectedComposerIds", []) + meta.get("lastFocusedComposerIds", []))
+    )
+    g = connect(global_db)
+    wid = {
+        "id": ps4_id,
+        "uri": {
+            "$mid": 1,
+            "fsPath": ps4_folder,
+            "external": ps4_uri,
+            "path": ps4_folder,
+            "scheme": "file",
+        },
+    }
+    for cid in composer_ids:
+        key = f"composerData:{cid}"
+        row = g.execute("SELECT value FROM cursorDiskKV WHERE key=?", (key,)).fetchone()
+        if not row:
+            continue
+        doc = json.loads(row[0])
+        doc["workspaceIdentifier"] = wid
+        g.execute(
+            "INSERT OR REPLACE INTO cursorDiskKV (key, value) VALUES (?, ?)",
+            (key, json.dumps(doc, separators=(",", ":"))),
+        )
+    g.commit()
+    print("copied", len(copied), "workspace keys; re-homed", len(composer_ids), "composers")
+
+    if setup_transcripts.is_dir():
+        ps4_transcripts.mkdir(parents=True, exist_ok=True)
+        for child in setup_transcripts.iterdir():
+            dest = ps4_transcripts / child.name
+            if child.is_dir():
+                shutil.copytree(child, dest, dirs_exist_ok=True)
+            else:
+                shutil.copy2(child, dest)
+    """
+    let setupTranscripts = FileManager.default.homeDirectoryForCurrentUser
+        .appendingPathComponent(".cursor/projects/\(setupCursorProjectSlug)/agent-transcripts", isDirectory: true)
+    let ps4Transcripts = homeCursorProjects().appendingPathComponent("agent-transcripts", isDirectory: true)
+
+    let (status, out) = runShell(
+        "/usr/bin/python3",
+        [
+            "-c", py,
+            setupWS.db.path,
+            ps4WS.db.path,
+            globalStorageDB().path,
+            ps4WS.storageId,
+            workspaceFolderPath,
+            workspaceFolder,
+            setupTranscripts.path,
+            ps4Transcripts.path,
+        ]
+    )
+    print(out.trimmingCharacters(in: .whitespacesAndNewlines))
+    guard status == 0 else {
+        fputs("copy-workspace-from-setup failed\n", stderr)
+        exit(1)
+    }
+    print("Reload Cursor window (Developer: Reload Window). Quit Cursor first if the list still ignores the copy.")
 }
 
 func cmdInstallLocal() throws {
@@ -162,14 +340,20 @@ func cmdInstallLocal() throws {
     try copyTranscript(to: projectDir)
     print("Copied agent transcript → \(projectDir.path)")
 
-    if let db = findWorkspaceDB(for: workspaceFolder) {
-        if patchComposerData(db: db) {
-            print("Updated composer.composerData in \(db.path)")
-            print("Reload Cursor window (Developer: Reload Window) if the chat list is still empty.")
+    if let ws = findWorkspaceDB(for: workspaceFolder) {
+        if patchGlobalComposerWorkspace(storageId: ws.storageId) {
+            print("Re-homed global composerData workspaceIdentifier → \(ws.storageId) (\(workspaceFolderPath))")
+        } else {
+            fputs("Warning: could not update global composerData workspaceIdentifier (chat may stay on cursor-setup)\n", stderr)
+        }
+        if patchComposerData(db: ws.db) {
+            print("Updated composer.composerData in \(ws.db.path)")
         } else {
             fputs("Could not update composer.composerData\n", stderr)
             exit(1)
         }
+        print("Reload Cursor window (Developer: Reload Window) if the chat list is still empty.")
+        print("If a thread appears but will not open, read docs/cursor-chats/README.md (Cursor 3.x composer hydration).")
     } else {
         print("Workspace DB not created yet. Open this repo in Cursor, then run install-local again.")
     }
@@ -184,6 +368,11 @@ case "install-local":
     }
 case "status":
     cmdStatus()
+case "copy-workspace-from-setup":
+    do { try cmdCopyWorkspaceFromSetup() } catch {
+        fputs("\(error)\n", stderr)
+        exit(1)
+    }
 default:
     usage()
 }

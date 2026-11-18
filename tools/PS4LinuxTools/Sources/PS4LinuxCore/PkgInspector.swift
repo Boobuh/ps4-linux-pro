@@ -56,8 +56,8 @@ public enum PkgInspector {
         if fields.titleID != TitleConstants.titleID {
             errors.append("TITLE_ID mismatch: got \(fields.titleID ?? "nil")")
         }
-        if let app = fields.appVer, let ver = fields.version, app == ver {
-            errors.append("APP_VER must differ from VERSION")
+        if let app = fields.appVer, let ver = fields.version, app != ver {
+            errors.append("APP_VER and VERSION should match for GoldHEN homebrew (got APP \(app), VERSION \(ver))")
         }
         if let app = fields.appVer, !PkgVersioning.appVerFitsParamSfo(app) {
             errors.append("APP_VER too long for param.sfo: \(app)")

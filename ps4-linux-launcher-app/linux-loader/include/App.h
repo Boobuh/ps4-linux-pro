@@ -32,9 +32,11 @@ public:
   void Render();
   void ChangeView(View *p_View);
   void ShowFatalReason(const std::string &p_Reason);
+  bool IsSystemUiOverlay() const { return m_SystemUiOverlay; }
 
 private:
   bool m_IsRunning;
+  bool m_SystemUiOverlay;
   View *m_CurrentView;
   int m_FlipArgs;
 };

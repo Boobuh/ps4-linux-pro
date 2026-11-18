@@ -14,6 +14,7 @@
 #include <sys/socket.h>
 #include <unistd.h>
 
+#include <clocale>
 #include <cstddef>
 #include <cerrno>
 #include <cstdint>
@@ -52,9 +53,43 @@ void Utility::SanitizeJsonString(std::string &p_Input) {
   p_Input.erase(remove_if(p_Input.begin(), p_Input.end(), [](char const c) { return '\a' == c || '\b' == c || '\f' == c || '\n' == c || '\r' == c || '\t' == c || '\v' == c || '\?' == c || '\0' == c || '\x1A' == c; }), p_Input.end());
 }
 
+std::vector<uint32_t> Utility::Utf8Codepoints(const std::string &p_Input) {
+  std::vector<uint32_t> out;
+  out.reserve(p_Input.size());
+  const unsigned char *s = reinterpret_cast<const unsigned char *>(p_Input.data());
+  const size_t len = p_Input.size();
+  for (size_t i = 0; i < len;) {
+    const unsigned char c = s[i];
+    if (c < 0x80) {
+      out.push_back(c);
+      i++;
+      continue;
+    }
+    if ((c & 0xE0) == 0xC0 && i + 1 < len) {
+      out.push_back(((c & 0x1F) << 6) | (s[i + 1] & 0x3F));
+      i += 2;
+      continue;
+    }
+    if ((c & 0xF0) == 0xE0 && i + 2 < len) {
+      out.push_back(((c & 0x0F) << 12) | ((s[i + 1] & 0x3F) << 6) | (s[i + 2] & 0x3F));
+      i += 3;
+      continue;
+    }
+    if ((c & 0xF8) == 0xF0 && i + 3 < len) {
+      out.push_back(((c & 0x07) << 18) | ((s[i + 1] & 0x3F) << 12) | ((s[i + 2] & 0x3F) << 6) |
+                    (s[i + 3] & 0x3F));
+      i += 4;
+      continue;
+    }
+    out.push_back('?');
+    i++;
+  }
+  return out;
+}
+
 // https://github.com/Mish7913/cpp-library/blob/master/str/str.cpp
 std::wstring Utility::StrToWstr(const std::string &p_Input) {
-  std::string s_CurrentLocale = std::setlocale(LC_ALL, "");
+  std::string s_CurrentLocale = setlocale(LC_ALL, "");
   const char *s_CharSource = p_Input.c_str();
   size_t s_CharDestinationSize = std::mbstowcs(NULL, s_CharSource, 0) + 1;
   wchar_t *s_CharDestination = new wchar_t[s_CharDestinationSize];
@@ -62,7 +97,7 @@ std::wstring Utility::StrToWstr(const std::string &p_Input) {
   std::mbstowcs(s_CharDestination, s_CharSource, s_CharDestinationSize);
   std::wstring s_Result = s_CharDestination;
   delete[] s_CharDestination;
-  std::setlocale(LC_ALL, s_CurrentLocale.c_str());
+  setlocale(LC_ALL, s_CurrentLocale.c_str());
   return s_Result;
 }
 

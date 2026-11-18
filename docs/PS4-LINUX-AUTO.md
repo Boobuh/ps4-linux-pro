@@ -6,13 +6,13 @@ Mac prepares everything; on the PS4 use **Payload Guest** from the Library (see 
 
 ```bash
 cd /path/to/ps4-linux-pro
-swift tools/ps4-linux-sync.swift sync --host 10.0.1.7 --install-gb 50
+swift tools/ps4-linux-sync.swift sync --host 10.0.1.7 --install-gb 100
 ```
 
 Or split: **`prepare`** (Mac only, no PS4) then **`upload`** when the console is on Orbis with FTP.
 
 ```bash
-swift tools/ps4-linux-sync.swift prepare --install-gb 50
+swift tools/ps4-linux-sync.swift prepare --install-gb 100
 swift tools/ps4-linux-sync.swift upload --host 10.0.1.7
 ```
 
@@ -38,7 +38,7 @@ No `exec install-HDD.sh`, no `exec start-arch.sh` unless auto-boot fails (then *
 | Flag | Default | Meaning |
 | --- | --- | --- |
 | `--host` | `10.0.1.7` or `PS4_HOST` | FTP target |
-| `--install-gb` | `50` | Written to `/user/system/boot/ps4-install-gb.txt` (minimum 50) |
+| `--install-gb` | `100` | Written to `/user/system/boot/ps4-install-gb.txt` (minimum 50) |
 
 ## First-time note
 

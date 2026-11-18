@@ -1,45 +1,82 @@
 // License: GPL-3.0
+// Tiny PKG eboot (<512 KiB): load plain menu ELF in-process (no LoadExec / no unified eboot).
 
 #include <fcntl.h>
-#include <orbis/Sysmodule.h>
-#include <orbis/SystemService.h>
-#include <stddef.h>
+#include <stdio.h>
 #include <unistd.h>
 
+#include <orbis/Sysmodule.h>
+#include <orbis/SystemService.h>
+
 #include "BootTrace.h"
+#include "BuildVersion.h"
+#include "GuestPlainLoader.h"
+#include "PkgLayout.h"
 #include "libLog.h"
-#include "notifi.h"
 
-static const OrbisSysModuleInternal ORBIS_SYSMODULE_INTERNAL_SYSUTIL = (OrbisSysModuleInternal)0x80000026;
+static void logEbootOnDiskSize(void) {
+  int fd = open("/app0/eboot.bin", O_RDONLY);
+  if (fd < 0) {
+    bootTraceStep("probe /app0/eboot.bin open failed");
+    return;
+  }
+  const off_t seekSz = lseek(fd, 0, SEEK_END);
+  close(fd);
+  char line[192];
+  (void)snprintf(line, sizeof(line), "eboot: on-disk /app0/eboot.bin seek=%lld (must be <524288)", (long long)seekSz);
+  bootTrace(line);
+  if (seekSz >= (off_t)(512 * 1024)) {
+    bootTrace("eboot: WARN large eboot — CE-41839-5 risk on Package Installer");
+  }
+}
 
-// Some mod menus scan for a running "eboot.bin" and attach automatically — guest runs as guest.elf.
+static const char *kMenuPlainPaths[] = {
+    PS4LINUX_MENU_PLAIN_PATH,
+    PS4LINUX_MENU_SYNC_PLAIN_PATH,
+    NULL,
+};
+
 int main(void) {
   logSetLogLevel(LL_All);
-  bootTrace("eboot: PS4 Linux chain start");
+  bootTraceStep("00 chain main entered");
+  bootTrace("eboot: PS4 Linux chain start (plain ELF loader)");
 
-  if (sceSysmoduleLoadModuleInternal(ORBIS_SYSMODULE_INTERNAL_SYSTEM_SERVICE) != 0) {
-    bootTrace("eboot: FATAL cannot load SYSTEM_SERVICE");
-    logKernel(LL_Fatal, "%s", "Unable to load ORBIS_SYSMODULE_INTERNAL_SYSTEM_SERVICE");
-    return -1;
+  char verLine[128];
+  (void)snprintf(verLine, sizeof(verLine), "eboot: PKG v%s build %s APP %s", PS4_LINUX_PKG_VERSION, PS4_LINUX_PKG_BUILD,
+                 PS4_LINUX_PKG_APP_VER);
+  bootTrace(verLine);
+
+  logEbootOnDiskSize();
+
+  bootTraceStep("01 load SYSTEM_SERVICE");
+  if (sceSysmoduleLoadModuleInternal(ORBIS_SYSMODULE_INTERNAL_SYSTEM_SERVICE) == 0) {
+    (void)sceSystemServiceHideSplashScreen();
+    bootTraceStep("02 splash hidden (early)");
   }
 
-  sceSysmoduleLoadModuleInternal(ORBIS_SYSMODULE_INTERNAL_SYSUTIL);
+  for (int i = 0; kMenuPlainPaths[i] != NULL; i++) {
+    char loadExecLine[192];
+    (void)snprintf(loadExecLine, sizeof(loadExecLine), "loader: LoadExec try %s", kMenuPlainPaths[i]);
+    bootTrace(loadExecLine);
+    const int32_t le = sceSystemServiceLoadExec(kMenuPlainPaths[i], NULL);
+    char leRet[128];
+    (void)snprintf(leRet, sizeof(leRet), "loader: LoadExec returned %d (plain oelf)", (int)le);
+    bootTrace(leRet);
 
-  const char *guestPath = "/app0/guest.elf";
-  int fd = open(guestPath, O_RDONLY);
-  if (fd < 0) {
-    bootTrace("eboot: FATAL cannot open guest.elf (missing from app0?)");
-    notifi(NULL, "PS4 Linux: guest.elf missing — reinstall PKG");
-    return -1;
+    bootTraceStep("03 guestPlainLoaderRun");
+    char tryLine[160];
+    (void)snprintf(tryLine, sizeof(tryLine), "loader: try %s", kMenuPlainPaths[i]);
+    bootTrace(tryLine);
+    const int rc = guestPlainLoaderRun(kMenuPlainPaths[i]);
+    char rcLine[128];
+    (void)snprintf(rcLine, sizeof(rcLine), "loader: returned %d (unexpected)", rc);
+    bootTrace(rcLine);
   }
-  close(fd);
-  bootTrace("eboot: guest.elf readable, LoadExec…");
 
-  logKernel(LL_Info, "%s", "Loading \"/app0/guest.elf\"");
-  const int loadRet = sceSystemServiceLoadExec(guestPath, NULL);
-  bootTrace("eboot: LoadExec returned — guest did not start");
-  logKernel(LL_Error, "LoadExec guest.elf returned %d", loadRet);
-  notifi(NULL, "PS4 Linux: LoadExec guest failed (%d)", loadRet);
-
+  bootTrace("eboot: FATAL no menu plain ELF");
+  bootTraceStep("99 menu missing");
+  for (int i = 0; i < 30; i++) {
+    usleep(500000);
+  }
   return -1;
 }

@@ -9,15 +9,21 @@ enum class PayloadProfile { Auto, ProBaikal1Gb, Generic1024Mb };
 enum class InstallTarget { InternalHdd, UsbStick };
 
 struct LinuxBootConfig {
+  static constexpr int kArchGbMin = 50;
+  static constexpr int kArchGbDefault = 100;
+  static constexpr int kArchGbMax = 512;
+
   int vramMb = 1024;
   PayloadProfile payload = PayloadProfile::Auto;
   InstallTarget installTarget = InstallTarget::InternalHdd;
-  int archGb = 50;
+  int archGb = kArchGbDefault;
   bool verboseBoot = true;
   SouthbridgeKind southbridgeOverride = SouthbridgeKind::Unknown;
 
   static constexpr const char *kConfigPath = "/data/linux/boot/ps4-linux-config.json";
 
+  static int ClampArchGb(int gb);
+  void Normalize();
   void Load();
   bool Save() const;
   bool WriteBootFiles() const;

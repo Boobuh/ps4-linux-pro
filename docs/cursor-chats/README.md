@@ -23,6 +23,16 @@ swift tools/ps4-linux-cursor-chats-migrate.swift install-local
 
 3. **Developer: Reload Window** if the old thread does not appear immediately.
 
+`install-local` also re-homes the archived composer from **cursor-setup** to this folder in Cursor’s global DB (`workspaceIdentifier`). Without that step the sidebar stays empty even when the jsonl copy succeeds.
+
+If the list is still empty after reload, copy the working **cursor-setup** workspace composer state:
+
+```bash
+swift tools/ps4-linux-cursor-chats-migrate.swift copy-workspace-from-setup
+```
+
+(Quitting Cursor first avoids SQLite WAL fighting the copy.)
+
 Check wiring:
 
 ```bash

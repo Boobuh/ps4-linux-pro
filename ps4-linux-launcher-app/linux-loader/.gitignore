@@ -13,5 +13,6 @@ build
 sce_sys/param.sfo
 eboot.bin
 guest.elf
+assets/boot/guest.elf
 pkg.gp4
 *.pkg

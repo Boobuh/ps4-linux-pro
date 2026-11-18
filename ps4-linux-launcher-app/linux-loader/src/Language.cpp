@@ -3,6 +3,10 @@
 
 // License: GPL-3.0
 
+#if defined(PS4LINUX_MINIMAL_MENU)
+// Built from LanguageMinimal.cpp when PS4LINUX_MINIMAL_MENU is set.
+#else
+
 #include "Language.h"
 
 #include <orbis/SystemService.h>
@@ -246,3 +250,5 @@ nlohmann::json Language::Fallback() {
   m_TypefacePaths = GetTypefacePaths();
   return GetData();
 }
+
+#endif // !PS4LINUX_MINIMAL_MENU

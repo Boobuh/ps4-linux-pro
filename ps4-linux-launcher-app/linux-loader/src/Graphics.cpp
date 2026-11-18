@@ -22,6 +22,8 @@
 
 #include "libLog.h"
 
+#include "BootTrace.h"
+#include "Ps4LinuxUiTheme.h"
 #include "Utility.h"
 
 //
@@ -57,6 +59,7 @@ inline float lerp(float p_X, float p_Y, float p_S) {
 
 Graphics::Graphics() {
   m_Ready = false;
+  m_SubmittedFlipCount = 0;
   // Setup variable
   m_Width = FRAME_WIDTH;
   m_Height = FRAME_HEIGHT;
@@ -70,13 +73,7 @@ Graphics::Graphics() {
 
   int s_Ret;
 
-  // Load freetype module
-  s_Ret = sceSysmoduleLoadModule(ORBIS_SYSMODULE_FREETYPE_OL);
-  if (s_Ret < 0) {
-    logKernel(LL_Debug, "%s", "Failed to load freetype module");
-  }
-
-  // Initialize freetype
+  // FREETYPE_OL loaded in main() before Application is constructed.
   s_Ret = FT_Init_FreeType(&m_FtLib);
   if (s_Ret != 0) {
     logKernel(LL_Debug, "%s", "Failed to initialize freetypee");
@@ -86,6 +83,7 @@ Graphics::Graphics() {
   m_Video = sceVideoOutOpen(ORBIS_VIDEO_USER_MAIN, ORBIS_VIDEO_OUT_BUS_MAIN, 0, 0);
   if (m_Video < 0) {
     logKernel(LL_Debug, "%s", "Failed to open a video out handle");
+    bootTraceStep("Graphics FAIL video out open");
     return;
   }
   logKernel(LL_Debug, "Handle is %i (0x%08x)", m_Video, m_Video);
@@ -118,7 +116,14 @@ Graphics::Graphics() {
 
   SetActiveFrameBuffer(0);
   sceVideoOutSetFlipRate(m_Video, 0);
+  FrameBufferClear();
+  sceGnmFlushGarlic();
+  sceVideoOutSubmitFlip(m_Video, m_ActiveFrameBufferIdx, ORBIS_VIDEO_OUT_FLIP_VSYNC, 0);
+  FrameBufferSaveFlip(0);
+  m_SubmittedFlipCount = 1;
+  FrameBufferSwap();
   m_Ready = true;
+  bootTraceStep("Graphics OK first blue flip");
 }
 
 Graphics::~Graphics() {
@@ -129,12 +134,14 @@ Graphics::~Graphics() {
   }
 }
 
-void Graphics::WaitFlip() {
+void Graphics::WaitFlip(int64_t waitUntilFlipArg) {
   if (!m_Ready || m_Video < 0) {
     return;
   }
 
-  FrameWait(m_Video, FrameBufferGetLastFlip() + 1);
+  if (waitUntilFlipArg >= 0 && m_SubmittedFlipCount > 0) {
+    FrameWait(m_Video, waitUntilFlipArg);
+  }
   FrameBufferClear();
 }
 
@@ -145,6 +152,7 @@ void Graphics::SwapBuffer(int p_FlipArgs) {
   sceGnmFlushGarlic();
   sceVideoOutSubmitFlip(m_Video, m_ActiveFrameBufferIdx, ORBIS_VIDEO_OUT_FLIP_VSYNC, p_FlipArgs);
   FrameBufferSaveFlip(p_FlipArgs);
+  m_SubmittedFlipCount++;
 
   FrameBufferSwap();
 }
@@ -296,18 +304,22 @@ void Graphics::FrameBufferSwap() {
 
 // frameBufferClear fills the frame buffer with white pixels. Returns nothing.
 void Graphics::FrameBufferClear() {
-  // Clear the screen with a black frame buffer
-  Color s_Blank = {0, 0, 0, 255};
-  FrameBufferFill(s_Blank);
+  FrameBufferFill(PS4LINUX_UI_BG);
 }
 
 // frameBufferFill fills the frame buffer with pixels of the given red, green, and blue values. Returns nothing.
 void Graphics::FrameBufferFill(Color p_Color) {
-  // Draw row-by-row, column-by-column
-  for (int yPos = 0; yPos < m_Height; yPos++) {
-    for (int xPos = 0; xPos < m_Width; xPos++) {
-      DrawPixel(xPos, yPos, p_Color);
-    }
+  if (!m_Ready || m_FrameBuffers == nullptr || m_ActiveFrameBufferIdx < 0 ||
+      m_ActiveFrameBufferIdx >= m_FrameBufferCount) {
+    return;
+  }
+  const uint32_t encoded =
+      0x80000000U | (static_cast<uint32_t>(p_Color.a) << 24) | (static_cast<uint32_t>(p_Color.r) << 16) |
+      (static_cast<uint32_t>(p_Color.g) << 8) | static_cast<uint32_t>(p_Color.b);
+  uint32_t *const fb = static_cast<uint32_t *>(m_FrameBuffers[m_ActiveFrameBufferIdx]);
+  const int pixels = m_Width * m_Height;
+  for (int i = 0; i < pixels; i++) {
+    fb[i] = encoded;
   }
 }
 
@@ -423,17 +435,16 @@ void Graphics::DrawText(const std::string &p_Text, std::vector<FT_Face> p_Faces,
 
   size_t s_TypefaceIndex = 0;
 
-  // Iterate each character of the text to write to the screen
-  std::wstring s_WideText = Utility::StrToWstr(p_Text);
-  for (size_t n = 0; n < s_WideText.size(); n++) {
+  const std::vector<uint32_t> codepoints = Utility::Utf8Codepoints(p_Text);
+  for (size_t n = 0; n < codepoints.size(); n++) {
+    const FT_ULong cp = static_cast<FT_ULong>(codepoints[n]);
     FT_UInt s_GlyphIndex;
 
     s_TypefaceIndex = 0;
     for (; s_TypefaceIndex < p_Faces.size(); s_TypefaceIndex++) {
-      // Get the glyph for the uint16_t code
-      s_GlyphIndex = FT_Get_Char_Index(p_Faces[s_TypefaceIndex], s_WideText[n]);
+      s_GlyphIndex = FT_Get_Char_Index(p_Faces[s_TypefaceIndex], cp);
 
-      if (s_GlyphIndex != 0 || s_WideText[n] == '\n') {
+      if (s_GlyphIndex != 0 || cp == '\n') {
         break;
       }
     }
@@ -442,10 +453,8 @@ void Graphics::DrawText(const std::string &p_Text, std::vector<FT_Face> p_Faces,
       continue;
     }
 
-    // Get the glyph slot for bitmap and font metrics
     FT_GlyphSlot s_Slot = p_Faces[s_TypefaceIndex]->glyph;
 
-    // Load and render in 8-bit color
     if (FT_Load_Glyph(p_Faces[s_TypefaceIndex], s_GlyphIndex, FT_LOAD_DEFAULT)) {
       continue;
     }
@@ -454,8 +463,7 @@ void Graphics::DrawText(const std::string &p_Text, std::vector<FT_Face> p_Faces,
       continue;
     }
 
-    // If we get a newline, increment the y offset, reset the x offset, and skip to the next character
-    if (s_WideText[n] == '\n') {
+    if (cp == '\n') {
       s_XOffset = 0;
       s_YOffset += s_Slot->bitmap.width * 2;
 
@@ -472,21 +480,16 @@ void Graphics::DrawText(const std::string &p_Text, std::vector<FT_Face> p_Faces,
         int s_X = p_StartX + l_XPos + s_XOffset + s_Slot->bitmap_left;
         int s_Y = p_StartY + l_YPos + s_YOffset - s_Slot->bitmap_top;
 
-        // Linearly interpolate between the foreground and background for smoother rendering
-        uint8_t s_R = lerp(float(p_FgColor.r), float(p_BgColor.r), 255.0f);
-        uint8_t s_G = lerp(float(p_FgColor.g), float(p_BgColor.g), 255.0f);
-        uint8_t s_B = lerp(float(p_FgColor.b), float(p_BgColor.b), 255.0f);
+        const float alpha = static_cast<float>(static_cast<unsigned char>(pixel)) / 255.0f;
+        const uint8_t s_R = static_cast<uint8_t>(lerp(float(p_BgColor.r), float(p_FgColor.r), alpha));
+        const uint8_t s_G = static_cast<uint8_t>(lerp(float(p_BgColor.g), float(p_FgColor.g), alpha));
+        const uint8_t s_B = static_cast<uint8_t>(lerp(float(p_BgColor.b), float(p_FgColor.b), alpha));
+        const Color s_FinalColor = {s_R, s_G, s_B, 255};
 
-        // Create new color struct with lerp'd values
-        Color s_FinalColor = {s_R, s_G, s_B, 255};
-
-        // We need to do bounds checking before commiting the pixel write due to our transformations, or we
-        // could write out-of-bounds of the frame buffer
         if (s_X < 0 || s_Y < 0 || s_X >= m_Width || s_Y >= m_Height) {
           continue;
         }
 
-        // If the pixel in the bitmap isn't blank, we'll draw it
         if (pixel != 0x00) {
           DrawPixel(s_X, s_Y, s_FinalColor);
         }
@@ -513,17 +516,16 @@ void Graphics::GetTextSize(const std::string &p_Text, std::vector<FT_Face> p_Fac
 
   size_t s_TypefaceIndex = 0;
 
-  // Iterate each character of the text to write to the screen
-  std::wstring s_WideText = Utility::StrToWstr(p_Text);
-  for (size_t n = 0; n < s_WideText.size(); n++) {
+  const std::vector<uint32_t> codepoints = Utility::Utf8Codepoints(p_Text);
+  for (size_t n = 0; n < codepoints.size(); n++) {
+    const FT_ULong cp = static_cast<FT_ULong>(codepoints[n]);
     FT_UInt s_GlyphIndex;
 
     s_TypefaceIndex = 0;
     for (; s_TypefaceIndex < p_Faces.size(); s_TypefaceIndex++) {
-      // Get the glyph for the uint16_t code
-      s_GlyphIndex = FT_Get_Char_Index(p_Faces[s_TypefaceIndex], s_WideText[n]);
+      s_GlyphIndex = FT_Get_Char_Index(p_Faces[s_TypefaceIndex], cp);
 
-      if (s_GlyphIndex != 0 || s_WideText[n] == '\n') {
+      if (s_GlyphIndex != 0 || cp == '\n') {
         break;
       }
     }
@@ -532,10 +534,8 @@ void Graphics::GetTextSize(const std::string &p_Text, std::vector<FT_Face> p_Fac
       continue;
     }
 
-    // Get the glyph slot for bitmap and font metrics
     FT_GlyphSlot s_Slot = p_Faces[s_TypefaceIndex]->glyph;
 
-    // Load and render in 8-bit color
     if (FT_Load_Glyph(p_Faces[s_TypefaceIndex], s_GlyphIndex, FT_LOAD_DEFAULT)) {
       continue;
     }
@@ -544,15 +544,13 @@ void Graphics::GetTextSize(const std::string &p_Text, std::vector<FT_Face> p_Fac
       continue;
     }
 
-    // If we get a newline, increment the y offset, reset the x offset, and skip to the next character
-    if (s_WideText[n] == '\n') {
+    if (cp == '\n') {
       s_XOffset = 0;
       s_YOffset += s_Slot->bitmap.width * 2;
 
       continue;
     }
 
-    // Increment x offset for the next character
     s_XOffset += s_Slot->advance.x >> 6;
   }
 
@@ -571,25 +569,26 @@ void Graphics::DrawTextContainer(const std::string &p_Text, std::vector<FT_Face>
 
   size_t s_TypefaceIndex = 0;
 
-  // Iterate each character of the text to write to the screen
-  std::wstring s_WideText = Utility::StrToWstr(p_Text);
-  for (size_t n = 0; n < s_WideText.size(); n++) {
+  const std::vector<uint32_t> codepoints = Utility::Utf8Codepoints(p_Text);
+  for (size_t n = 0; n < codepoints.size(); n++) {
+    const FT_ULong cp = static_cast<FT_ULong>(codepoints[n]);
     FT_UInt s_GlyphIndex;
 
     s_TypefaceIndex = 0;
     for (; s_TypefaceIndex < p_Faces.size(); s_TypefaceIndex++) {
-      // Get the glyph for the uint16_t code
-      s_GlyphIndex = FT_Get_Char_Index(p_Faces[s_TypefaceIndex], s_WideText[n]);
+      s_GlyphIndex = FT_Get_Char_Index(p_Faces[s_TypefaceIndex], cp);
 
-      if (s_GlyphIndex != 0 || s_WideText[n] == '\n') {
+      if (s_GlyphIndex != 0 || cp == '\n') {
         break;
       }
     }
 
-    // Get the glyph slot for bitmap and font metrics
+    if (s_TypefaceIndex >= p_Faces.size()) {
+      continue;
+    }
+
     FT_GlyphSlot s_Slot = p_Faces[s_TypefaceIndex]->glyph;
 
-    // Load and render in 8-bit color
     if (FT_Load_Glyph(p_Faces[s_TypefaceIndex], s_GlyphIndex, FT_LOAD_DEFAULT)) {
       continue;
     }
@@ -598,8 +597,7 @@ void Graphics::DrawTextContainer(const std::string &p_Text, std::vector<FT_Face>
       continue;
     }
 
-    // If we get a newline, increment the y offset, reset the x offset, and skip to the next character
-    if (s_WideText[n] == '\n') {
+    if (cp == '\n') {
       s_XOffset = 0;
       s_YOffset += s_Slot->bitmap.width * 2;
 
@@ -629,21 +627,16 @@ void Graphics::DrawTextContainer(const std::string &p_Text, std::vector<FT_Face>
         int s_X = p_StartX + l_XPos + s_XOffset + s_Slot->bitmap_left;
         int s_Y = p_StartY + l_YPos + s_YOffset - s_Slot->bitmap_top;
 
-        // Linearly interpolate between the foreground and background for smoother rendering
-        uint8_t s_R = lerp(float(p_FgColor.r), float(p_BgColor.r), 255.0f);
-        uint8_t s_G = lerp(float(p_FgColor.g), float(p_BgColor.g), 255.0f);
-        uint8_t s_B = lerp(float(p_FgColor.b), float(p_BgColor.b), 255.0f);
+        const float alpha = static_cast<float>(static_cast<unsigned char>(s_Pixel)) / 255.0f;
+        const uint8_t s_R = static_cast<uint8_t>(lerp(float(p_BgColor.r), float(p_FgColor.r), alpha));
+        const uint8_t s_G = static_cast<uint8_t>(lerp(float(p_BgColor.g), float(p_FgColor.g), alpha));
+        const uint8_t s_B = static_cast<uint8_t>(lerp(float(p_BgColor.b), float(p_FgColor.b), alpha));
+        const Color s_FinalColor = {s_R, s_G, s_B, 255};
 
-        // Create new color struct with lerp'd values
-        Color s_FinalColor = {s_R, s_G, s_B, 255};
-
-        // We need to do bounds checking before commiting the pixel write due to our transformations, or we
-        // could write out-of-bounds of the frame buffer
         if (s_X < 0 || s_Y < 0 || s_X >= m_Width || s_Y >= m_Height) {
           continue;
         }
 
-        // If the pixel in the bitmap isn't blank, we'll draw it
         if (s_Pixel != 0x00) {
           DrawPixel(s_X, s_Y, s_FinalColor);
         }

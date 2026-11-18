@@ -94,10 +94,10 @@ void SettingsView::OpenPicker(SettingKind kind) {
     break;
   case SettingKind::ArchGb:
     m_PickerTitle = "Arch partition size";
-    m_PickerLabels = {"50 GB (recommended)", "75 GB", "100 GB", "150 GB"};
+    m_PickerLabels = {"50 GB (minimum)", "75 GB", "100 GB (default)", "125 GB", "150 GB", "200 GB"};
     {
-      const int sizes[] = {50, 75, 100, 150};
-      for (int i = 0; i < 4; i++) {
+      const int sizes[] = {50, 75, 100, 125, 150, 200};
+      for (int i = 0; i < 6; i++) {
         if (sizes[i] == m_Config.archGb) {
           m_PickerSelected = i;
         }
@@ -134,8 +134,10 @@ void SettingsView::ApplyPickerChoice(int index) {
     m_Config.installTarget = (index == 1) ? InstallTarget::UsbStick : InstallTarget::InternalHdd;
     break;
   case SettingKind::ArchGb: {
-    const int sizes[] = {50, 75, 100, 150};
-    m_Config.archGb = sizes[index];
+    const int sizes[] = {50, 75, 100, 125, 150, 200};
+    if (index >= 0 && index < 6) {
+      m_Config.archGb = LinuxBootConfig::ClampArchGb(sizes[index]);
+    }
     break;
   }
   case SettingKind::VerboseBoot:

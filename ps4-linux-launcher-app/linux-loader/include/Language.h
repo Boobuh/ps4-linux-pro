@@ -10,7 +10,9 @@
 #include <string>
 #include <vector>
 
+#if !defined(PS4LINUX_MINIMAL_MENU)
 #include <nlohmann_json.hpp>
+#endif
 
 class Language {
 public:
@@ -22,12 +24,16 @@ public:
   int32_t GetCode();
   std::string GetName();
   std::vector<std::string> GetTypefacePaths();
+#if !defined(PS4LINUX_MINIMAL_MENU)
   nlohmann::json GetData();
 
   nlohmann::json Fallback();
+#endif
 
 private:
+#if !defined(PS4LINUX_MINIMAL_MENU)
   nlohmann::json m_Data;
+#endif
   int32_t m_Code;
   std::string m_Name;
   std::vector<std::string> m_TypefacePaths;

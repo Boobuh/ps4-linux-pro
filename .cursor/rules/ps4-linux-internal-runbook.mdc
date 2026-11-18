@@ -1,0 +1,14 @@
+---
+description: PS4 Linux PKG/launch — use internal runbook before layout or CE-41839 changes
+alwaysApply: true
+---
+
+# PS4 Linux internal runbook
+
+Before changing **eboot layout**, **create-fself** flags, **PkgLayoutGuard**, or debugging **CE-41839-5** / **CE-34878-0**:
+
+1. Read **`tmp/docs/PS4-LINUX-INTERNAL-RUNBOOK.md`** (canonical how-it-should-work).
+2. Pull console evidence via **`swift tools/ps4-linux-console-cycle.swift status`** and **`logs`** (especially **`/data/pkg/ps4-linux-app.log`**).
+3. Do **not** reintroduce split **`guest.oelf`** / tiny eboot unless the runbook is explicitly updated with hardware proof.
+
+Public user docs: **`docs/PS4-LINUX-LOADER-PKG.md`**, **`docs/PS4-HOMEBREW-LOADER-PATTERNS.md`**.

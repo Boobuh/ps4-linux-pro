@@ -1,12 +1,12 @@
 // Sync PS4 internal Linux boot files over GoldHEN FTP — downloads, patches initramfs for auto install, uploads.
-// Usage: swift tools/ps4-linux-sync.swift sync [--host 10.0.1.7] [--install-gb 50]
+// Usage: swift tools/ps4-linux-sync.swift sync [--host 10.0.1.7] [--install-gb 100]
 import CryptoKit
 import Foundation
 
 struct Config {
     var host = ProcessInfo.processInfo.environment["PS4_HOST"] ?? "10.0.1.7"
     var port = 2121
-    var installGB = 50
+    var installGB = 100
     let assetRoot: URL
 
     init() {
@@ -305,15 +305,7 @@ func uploadAssets(cfg: Config, initramfs: URL, arch: URL, installGBFile: URL) th
     try ftpUpload(local: arch, remotePath: "/user/system/boot/arch.tar.xz", host: cfg.host, port: cfg.port)
     try ftpUpload(local: installGBFile, remotePath: "/user/system/boot/ps4-install-gb.txt", host: cfg.host, port: cfg.port)
 
-    let elf = cfg.assetRoot.appendingPathComponent("linux-1024mb.elf")
-    let bin = cfg.assetRoot.appendingPathComponent("linux-1024mb.bin")
-    try ftpUpload(local: elf, remotePath: "/data/payloads/linux-1024mb.elf", host: cfg.host, port: cfg.port)
-    try ftpUpload(local: bin, remotePath: "/data/payloads/linux-1024mb.bin", host: cfg.host, port: cfg.port)
-
-    let meta = cfg.assetRoot.appendingPathComponent("payloads/meta.json")
-    if FileManager.default.fileExists(atPath: meta.path) {
-        try ftpUpload(local: meta, remotePath: "/data/payloads/meta.json", host: cfg.host, port: cfg.port)
-    }
+    try uploadPayloads(cfg: cfg)
 
     let loaderPkgDir = cfg.assetRoot.deletingLastPathComponent().deletingLastPathComponent()
         .appendingPathComponent("ps4-linux-launcher-app/linux-loader", isDirectory: true)
@@ -335,16 +327,70 @@ func uploadAssets(cfg: Config, initramfs: URL, arch: URL, installGBFile: URL) th
     }
 }
 
+func isElfFile(_ url: URL) -> Bool {
+    guard let h = try? Data(contentsOf: url, options: [.mappedIfSafe, .alwaysMapped]), h.count >= 4 else {
+        return false
+    }
+    return h[0] == 0x7f && h[1] == 0x45 && h[2] == 0x4c && h[3] == 0x46
+}
+
+func isKexecLoaderBin(_ url: URL) -> Bool {
+    guard FileManager.default.fileExists(atPath: url.path) else { return false }
+    if isElfFile(url) { return false }
+    let sz = fileSize(url)
+    return sz >= 8192 && sz <= 2 * 1024 * 1024
+}
+
 func ensureLoaderPayloads(cfg: Config) throws {
     let zip = cfg.assetRoot.appendingPathComponent("PS4-Linux-Loader-v25.2.zip")
     if !FileManager.default.fileExists(atPath: zip.path) {
         try downloadIfNeeded(url: Config.loaderZipURL, to: zip, expectedSHA256: nil)
     }
+    let bin = cfg.assetRoot.appendingPathComponent("linux-1024mb.bin")
     let elf = cfg.assetRoot.appendingPathComponent("linux-1024mb.elf")
-    if !FileManager.default.fileExists(atPath: elf.path) {
-        _ = try run("/usr/bin/unzip", ["-o", "-j", zip.path, "elf/linux-1024mb.elf", "-d", cfg.assetRoot.path])
+    if !isKexecLoaderBin(bin) || !FileManager.default.fileExists(atPath: elf.path) {
+        print("Extracting ps4-linux-loader v25.2 kexec .bin + .elf…")
         _ = try run("/usr/bin/unzip", ["-o", "-j", zip.path, "bin/linux-1024mb.bin", "-d", cfg.assetRoot.path])
+        _ = try run("/usr/bin/unzip", ["-o", "-j", zip.path, "elf/linux-1024mb.elf", "-d", cfg.assetRoot.path])
     }
+    guard isKexecLoaderBin(bin) else {
+        throw SyncError.message("\(bin.path) is not a kexec loader (expected ~329088 B, not ELF)")
+    }
+
+    let payloadDir = cfg.assetRoot.appendingPathComponent("payloads", isDirectory: true)
+    try FileManager.default.createDirectory(at: payloadDir, withIntermediateDirectories: true)
+    for name in ["linux-1gb-pro-baikal.bin", "payload-1100-1gb-pro-baikal.bin"] {
+        let alias = payloadDir.appendingPathComponent(name)
+        if FileManager.default.fileExists(atPath: alias.path) {
+            try FileManager.default.removeItem(at: alias)
+        }
+        try FileManager.default.copyItem(at: bin, to: alias)
+    }
+    let meta = payloadDir.appendingPathComponent("meta.json")
+    try """
+    {"source":"ps4-linux-loader-v25.2","kexec_bin_bytes":\(fileSize(bin)),"note":"Baikal aliases are copies of linux-1024mb.bin until dedicated pro-baikal kexec exists"}
+    """.write(to: meta, atomically: true, encoding: .utf8)
+}
+
+func uploadPayloads(cfg: Config) throws {
+    try ensureLoaderPayloads(cfg: cfg)
+    try waitForFTP(host: cfg.host, port: cfg.port)
+
+    let bin = cfg.assetRoot.appendingPathComponent("linux-1024mb.bin")
+    let elf = cfg.assetRoot.appendingPathComponent("linux-1024mb.elf")
+    let payloadDir = cfg.assetRoot.appendingPathComponent("payloads", isDirectory: true)
+
+    let uploads: [(URL, String)] = [
+        (bin, "/data/payloads/linux-1024mb.bin"),
+        (elf, "/data/payloads/linux-1024mb.elf"),
+        (payloadDir.appendingPathComponent("linux-1gb-pro-baikal.bin"), "/data/payloads/linux-1gb-pro-baikal.bin"),
+        (payloadDir.appendingPathComponent("payload-1100-1gb-pro-baikal.bin"), "/data/payloads/payload-1100-1gb-pro-baikal.bin"),
+        (payloadDir.appendingPathComponent("meta.json"), "/data/payloads/meta.json"),
+    ]
+    for (local, remote) in uploads {
+        try ftpUpload(local: local, remotePath: remote, host: cfg.host, port: cfg.port)
+    }
+    print("\n=== Payloads OK ===\nReal kexec .bin (~329 KiB, magic e9…) replaces ELF misnamed .bin files on console.\n")
 }
 
 func sync(cfg: Config) throws {
@@ -406,13 +452,16 @@ do {
         let bundle = try prepareAssets(cfg: cfg)
         try uploadAssets(cfg: cfg, initramfs: bundle.initramfs, arch: bundle.arch, installGBFile: bundle.installGBFile)
         print("\n=== Upload done ===\nPayLoader → linux-1024mb.elf (no USB, no rescue typing).\n")
+    case "payloads":
+        try uploadPayloads(cfg: cfg)
     default:
         print(
             """
             Usage:
-              swift tools/ps4-linux-sync.swift sync [--host 10.0.1.7] [--install-gb 50]
-              swift tools/ps4-linux-sync.swift prepare [--install-gb 50]
-              swift tools/ps4-linux-sync.swift upload [--host 10.0.1.7] [--install-gb 50]
+              swift tools/ps4-linux-sync.swift sync [--host 10.0.1.7] [--install-gb 100]
+              swift tools/ps4-linux-sync.swift prepare [--install-gb 100]
+              swift tools/ps4-linux-sync.swift upload [--host 10.0.1.7] [--install-gb 100]
+              swift tools/ps4-linux-sync.swift payloads [--host 10.0.1.7]
             """
         )
         exit(1)

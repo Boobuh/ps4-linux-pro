@@ -1,11 +1,11 @@
 # PS4 Linux Pro
 
-Homebrew **Library** app for GoldHEN (FW 11.00+): install a standalone **PS4 Linux** PKG, sync internal boot files from your Mac, and launch kexec Linux from **`/data/linux/boot/`** (Baikal Pro / internal HDD).
+Homebrew **Library** app for GoldHEN (FW 11.00+): one tile (**`CSTP00003`**). Mac builds bump **`APP_VER`** and **update** that title in place — not a second copy.
 
 | | |
 | --- | --- |
-| **TITLE_ID** | `CSTP00002` |
-| **CONTENT_ID** | `IV0000-CSTP00002_00-PS4LINUXL0700000` |
+| **TITLE_ID** | `CSTP00003` |
+| **CONTENT_ID** | `IV0000-CSTP00003_00-PS4LINUXL0700001` |
 
 ## Quick start (Mac)
 

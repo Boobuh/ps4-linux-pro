@@ -4,10 +4,13 @@
 extern "C" {
 #endif
 
-/// Append one line to the first writable boot log path (FTP-visible on GoldHEN).
+/// Append one line to all boot log paths (FTP: /data/linux/boot/ps4-linux-app.log).
 void bootTrace(const char *message);
 
-/// Path that last succeeded, or default for UI.
+/// Same as bootTrace with a step: prefix and PKG version tag (blue-screen diagnosis).
+void bootTraceStep(const char *step);
+
+/// Primary log path for UI.
 const char *bootTraceLogPath(void);
 
 #ifdef __cplusplus

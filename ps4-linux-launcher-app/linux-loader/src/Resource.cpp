@@ -23,6 +23,7 @@ Resource::Resource(Application *p_App, std::vector<std::string> p_TypefacePaths)
     return;
   }
 
+#if !defined(PS4LINUX_MINIMAL_MENU)
   // Load images
   if (m_App->Graph->LoadPNG(&m_Logo, "/app0/assets/images/Logo.png") < 0) {
     logKernel(LL_Debug, "%s", "Unable to load logo image!");
@@ -58,6 +59,7 @@ Resource::Resource(Application *p_App, std::vector<std::string> p_TypefacePaths)
     logKernel(LL_Debug, "%s", "Unable to load circle image!");
   }
   m_Circle.use_alpha = false;
+#endif
 
   if (m_App->Graph->InitTypefaces(m_Typefaces, p_TypefacePaths, DEFAULT_FONT_SIZE) < 0) {
     logKernel(LL_Debug, "%s", "Failed to initialize typefaces!");
@@ -71,6 +73,7 @@ Resource::~Resource() {
     return;
   }
 
+#if !defined(PS4LINUX_MINIMAL_MENU)
   m_App->Graph->UnloadPNG(&m_Logo);
   m_App->Graph->UnloadPNG(&m_Unknown);
   m_App->Graph->UnloadPNG(&m_Lock);
@@ -78,4 +81,5 @@ Resource::~Resource() {
   m_App->Graph->UnloadPNG(&m_Triangle);
   m_App->Graph->UnloadPNG(&m_Square);
   m_App->Graph->UnloadPNG(&m_Circle);
+#endif
 }

@@ -52,16 +52,38 @@ struct PS4LinuxTestRunner {
 
         let makefile = loader.appendingPathComponent("Makefile")
         if let mk = try? String(contentsOf: makefile, encoding: .utf8) {
-            for needle in ["BootTrace", "CSTP00002", "guest.elf", "ChainLauncher"] {
+            for needle in ["CSTP00003", "eboot.bin", "$(MENU_OBJS)", "verify-layout", "unified eboot", "PS4LINUX_EBOOT_MIN_BYTES"] {
                 if !mk.contains(needle) {
                     errors.append("Makefile missing \(needle)")
+                }
+            }
+            for forbidden in ["guestPlainLoaderRun", "chain_launcher.o", "GUEST_OELF", "guest_plain_loader"] {
+                if mk.contains(forbidden) {
+                    errors.append("Makefile contains forbidden split pattern: \(forbidden)")
                 }
             }
         } else {
             errors.append("Missing linux-loader/Makefile")
         }
 
-        for src in ["src/BootTrace.c", "src/ChainLauncher.c", "include/BootTrace.h"] {
+        errors.append(contentsOf: PkgLayoutGuard.validateBuildTree(loaderDir: loader))
+
+        let apollo = FselfShipGate.referenceApolloEboot(repo: repo)
+        let one = FselfShipGate.referenceOneFamilyEboot(repo: repo)
+        if FileManager.default.fileExists(atPath: apollo.path) {
+            let refErrors = FselfShipGate.validateWorkingReference(eboot: apollo)
+            if !refErrors.isEmpty {
+                errors.append("Apollo reference eboot corrupt: \(refErrors.joined(separator: "; "))")
+            }
+        }
+        if FileManager.default.fileExists(atPath: one.path) {
+            let refErrors = FselfShipGate.validateWorkingReference(eboot: one)
+            if !refErrors.isEmpty {
+                errors.append("OneFamily reference eboot corrupt: \(refErrors.joined(separator: "; "))")
+            }
+        }
+
+        for src in ["src/BootTrace.c", "src/main.cpp", "include/BootTrace.h"] {
             if !FileManager.default.fileExists(atPath: loader.appendingPathComponent(src).path) {
                 errors.append("Missing \(src)")
             }
@@ -72,6 +94,19 @@ struct PS4LinuxTestRunner {
             .filter { $0.lastPathComponent.hasPrefix("PS4-Linux-v") && $0.pathExtension == "pkg" }
             .sorted { $0.lastPathComponent > $1.lastPathComponent }
             .first
+
+        if let versioned, FileManager.default.fileExists(atPath: versioned.path) {
+            let eboot = loader.appendingPathComponent("eboot.bin")
+            if FileManager.default.fileExists(atPath: eboot.path) {
+                let size = (try? eboot.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0
+                if size <= PkgLayoutGuard.splitChainMaxBytes {
+                    errors.append("Built eboot.bin \(size) B — split-chain / CE-34878 regression")
+                }
+                if size < PkgLayoutGuard.ebootMinUnifiedBytes {
+                    errors.append("Built eboot.bin \(size) B — below unified minimum")
+                }
+            }
+        }
 
         if let versioned, FileManager.default.fileExists(atPath: pkgTool.path) {
             let work = FileManager.default.temporaryDirectory.appendingPathComponent("ps4linux-pkg-test", isDirectory: true)
@@ -107,6 +142,7 @@ struct PS4LinuxTestRunner {
     static func runE2E(repo: URL) -> Int {
         let host = ProcessInfo.processInfo.environment["PS4_HOST"] ?? "10.0.1.7"
         let port = ProcessInfo.processInfo.environment["PS4_PORT"] ?? "2121"
+        let loader = RepoPaths.loaderDir(repo: repo)
         var errors: [String] = []
 
         guard ftpReachable(host: host, port: port) else {
@@ -119,19 +155,68 @@ struct PS4LinuxTestRunner {
             errors.append("/data/pkg/ has no PS4-Linux-v*.pkg")
         }
 
-        for logPath in TitleConstants.bootLogPaths {
+        let logPaths = [
+            "/data/pkg/ps4-linux-app.log",
+            "/data/linux/boot/ps4-linux-last-run.txt",
+            "/data/linux/boot/ps4-linux-app.log",
+        ]
+        var logBody = ""
+        for logPath in logPaths {
             if ftpFileExists(host: host, port: port, path: logPath) {
                 print("  E2E: found log at \(logPath)")
+                if let body = ftpDownload(host: host, port: port, path: logPath) {
+                    logBody += body
+                }
+            }
+        }
+        for logPath in ConsoleLaunchE2E.defaultLogPaths where !logPaths.contains(logPath) {
+            if ftpFileExists(host: host, port: port, path: logPath),
+               let body = ftpDownload(host: host, port: port, path: logPath) {
+                logBody += body
             }
         }
 
-        let appLog = "/user/app/CSTP00002/ps4-linux-app.log"
-        if ftpFileExists(host: host, port: port, path: appLog) {
-            if let body = ftpDownload(host: host, port: port, path: appLog), body.contains("eboot:") || body.contains("PS4 Linux") {
-                print("  E2E: boot log content looks valid (\(body.count) bytes)")
+        let macLatest = (try? FileManager.default.contentsOfDirectory(at: loader, includingPropertiesForKeys: nil))?
+            .filter { $0.lastPathComponent.hasPrefix("PS4-Linux-v") && $0.pathExtension == "pkg" }
+            .sorted { $0.lastPathComponent > $1.lastPathComponent }
+            .first?.lastPathComponent
+
+        let installed = ftpDownload(host: host, port: port, path: "/user/app/CSTP00003/app.json")
+            .flatMap { json -> String? in
+                guard let range = json.range(of: "PS4-Linux-v") else { return nil }
+                let tail = json[range.lowerBound...]
+                guard let end = tail.firstIndex(of: "\"") else { return nil }
+                return String(tail[..<end])
             }
-        } else {
-            print("  E2E: no app log yet (launch PS4 Linux once after install)")
+
+        let launchErrors = ConsoleLaunchE2E.validateLaunchAfterInstall(
+            macLatestPkgFileName: macLatest,
+            consoleInstalledPkgFileName: installed,
+            combinedBootLog: logBody
+        )
+        for e in launchErrors {
+            errors.append(e)
+        }
+
+        if logBody.isEmpty, launchErrors.isEmpty {
+            print("  E2E: no boot log yet — install latest PKG and launch once (strict mode off or not installed yet)")
+        } else if !logBody.isEmpty {
+            let buildNum = (try? String(contentsOf: loader.appendingPathComponent("PKG_VERSION"), encoding: .utf8))?
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            let verPrefix = buildNum.map { "v\($0)" }
+            let logErrors = PkgLayoutGuard.validateBootLogContent(logBody, expectedVersionPrefix: verPrefix)
+            for e in logErrors {
+                errors.append("E2E boot log: \(e)")
+            }
+            if logErrors.isEmpty {
+                print("  E2E: boot log OK (\(logBody.count) bytes)")
+            }
+        }
+
+        for logPath in TitleConstants.bootLogPaths {
+            if ftpFileExists(host: host, port: port, path: logPath) {
+                print("  E2E: also \(logPath)")
+            }
         }
 
         for e in errors {

@@ -10,18 +10,18 @@
 #include <ctime>
 
 // Prefer title install dir (writable from app sandbox on GoldHEN).
-static const char *kTitleLogPath = "/user/app/CSTP00002/ps4-linux-app.log";
+static const char *kBootLogPath = "/data/linux/boot/ps4-linux-app.log";
+static const char *kTitleLogPath = "/user/app/CSTP00003/ps4-linux-app.log";
 static const char *kUserDotLogPath = "/user/.ps4-linux-app.log";
 static const char *kUserDataLogPath = "/user/data/ps4-linux-app.log";
 static const char *kPkgDirLogPath = "/data/pkg/ps4-linux-app.log";
-static const char *kBootLogPath = "/data/linux/boot/ps4-linux-app.log";
 static const char *kSystemBootLogPath = "/user/system/boot/ps4-linux-app.log";
 static const char *kFallbackLogPath = "/data/ps4-linux-app.log";
-static const char *g_ActiveLogPath = kTitleLogPath;
+static const char *g_ActiveLogPath = kBootLogPath;
 
 static void appendLine(const char *level, const char *file, int line, const char *message) {
-  const char *paths[] = {g_ActiveLogPath, kTitleLogPath, kUserDotLogPath, kUserDataLogPath, kPkgDirLogPath,
-                         kBootLogPath,    kSystemBootLogPath, kFallbackLogPath, nullptr};
+  const char *paths[] = {g_ActiveLogPath, kBootLogPath, kTitleLogPath, kUserDotLogPath, kUserDataLogPath, kPkgDirLogPath,
+                         kSystemBootLogPath, kFallbackLogPath, nullptr};
   FILE *f = nullptr;
   for (int i = 0; paths[i] != nullptr; i++) {
     f = std::fopen(paths[i], "a");
@@ -85,7 +85,7 @@ const char *AppFileLog::LogPath() {
 }
 
 void AppFileLog::InitSession() {
-  g_ActiveLogPath = kTitleLogPath;
+  g_ActiveLogPath = kBootLogPath;
   bootTrace("======== PS4 Linux session (guest) ========");
   Info("======== PS4 Linux app session start PKG v%s APP %s ========", PS4_LINUX_PKG_VERSION,
        PS4_LINUX_PKG_APP_VER);

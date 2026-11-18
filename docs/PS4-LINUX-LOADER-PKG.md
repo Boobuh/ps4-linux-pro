@@ -2,7 +2,7 @@
 
 Dedicated **Library** app (not Payload Guest): **PS4 Linux** loads the **ps4-linux-loader** kexec payload from internal storage and boots **`/data/linux/boot/`** (Baikal Pro internal Linux stack).
 
-**Pre-release line:** semantic **v0.7.x** in the UI; Sony **`param.sfo`** bumps **`APP_VER`** (`00.70`, `00.71`, …) **and** **`VERSION`** (`01.70`, `01.71`, … from the build counter). Both must rise each build — keeping **`VERSION` stuck at `01.00`** made GoldHEN treat every PKG as the same revision even when **`APP_VER`** changed.
+**Pre-release line:** semantic **v0.7.x** in the UI; Sony **`param.sfo`** bumps each build. Builds **70–79** use **`APP_VER=00.xx`** + **`VERSION=01.xx`**. From build **80+**, **`APP_VER=01.xx`** and **`VERSION=02.xx`** so GoldHEN accepts updates over **`00.79`** installs.
 
 ## Build the PKG (Mac, once)
 
@@ -21,26 +21,33 @@ Output (human-readable — use this in Package Installer):
 
 `ps4-linux-launcher-app/linux-loader/PS4-Linux-v0.7.5-b75-APP0075.pkg`
 
-Pattern: **`PS4-Linux-v{semver}-b{build}-APP{sonyAppVer}.pkg`** (e.g. `APP0075` = param.sfo **00.75**). OpenOrbis also writes **`IV0000-CSTP00002_00-PS4LINUXL0700000.pkg`** (same bytes; ignore for install).
+Pattern: **`PS4-Linux-v{semver}-b{build}-APP{sonyAppVer}.pkg`**. Canonical title **`CSTP00003`** only — one Library tile; each Mac build **updates** that title (same `TITLE_ID`, higher `APP_VER` / `VERSION`). Do not install older **`CSTP00002`** PKGs (different app id = duplicate tile).
+
+OpenOrbis also writes **`IV0000-CSTP00003_00-PS4LINUXL0700001.pkg`** (same bytes as the versioned name).
 
 Or install [OpenOrbis PS4 Toolchain macOS PKG](https://github.com/OpenOrbis/OpenOrbis-PS4-Toolchain/releases) and set `OO_PS4_TOOLCHAIN`, then `make -C ps4-linux-launcher-app/linux-loader`.
 
-**Tests (Mac):** `swift tools/ps4-linux-test.swift` — see [PS4-LINUX-TESTING.md](PS4-LINUX-TESTING.md).
+**Tests (Mac):** `swift tools/ps4-linux-test.swift` — see [PS4-LINUX-TESTING.md](PS4-LINUX-TESTING.md). Layout regressions (CE-41839-5, truncated guest): [PS4-LINUX-PKG-POSTMORTEM.md](PS4-LINUX-PKG-POSTMORTEM.md).
 
 ## Install + run on PS4
 
-1. **`swift tools/ps4-linux-sync.swift sync`** — kernel, initramfs, **`arch.tar.xz`**, **`linux-1024mb.bin`**
-2. FTP the built **`*.pkg`** → **`/data/pkg/`** (sync uploads it when present)
-3. **GoldHEN → Debug Settings → Package Installer**
+1. **`swift tools/ps4-linux-sync.swift sync`** — kernel, initramfs, **`arch.tar.xz`**, **`linux-1024mb.bin`** (see **`docs/PS4-LINUX-BAIKAL-ASSETS.md`**)
+2. If loaders were ELF misnamed `.bin`: **`swift tools/ps4-linux-sync.swift payloads`**
+3. FTP the built **`*.pkg`** → **`/data/pkg/`** (sync uploads it when present)
+4. **GoldHEN → Debug Settings → Package Installer**
    - **Disable “Enable Background Installation”** — if this stays on, GoldHEN often reports **Package already installed** and never offers overwrite ([community fix](https://www.reddit.com/r/ps4homebrew/comments/1qhq67v/goldhen_package_already_installed/)).
    - **Package Source:** `Hdd [hdd:/data/pkg/]` (or All)
-4. Install the **`PS4-Linux-v*.pkg`** file from **`/data/pkg/`** (pick the highest **APP** number in the filename).
+5. Install the newest **`PS4-Linux-v*.pkg`** for **`CSTP00003`** from **`/data/pkg/`** (highest **APP** in the filename).
 
-**If Package Installer says “already installed”** — delete once, then install (GoldHEN quirk, not you):
+**One Library app:** only **`CSTP00003`**. Older **`CSTP00002`** / **`CSTP00001`** were broken update paths — remove them so you do not get two tiles:
 
-1. **Library → PS4 Linux → Options → Delete** (confirm). Also delete old **`CSTP00001`** tile if it still exists.
-2. Package Installer → **Background Installation OFF**, source **Hdd** `/data/pkg/`.
-3. Install the PKG again. Latest build shows **v0.7.x** and **APP 00.xx** in the in-app footer.
+```bash
+swift tools/ps4-linux-legacy-titles.swift remove --host 10.0.1.7
+```
+
+Then **Library → Delete** any ghost **PS4 Linux** tiles that remain. After that, each new PKG **replaces** **`CSTP00003`** (Package Installer update), not a second copy.
+
+**If Package Installer says “already installed” on `CSTP00003`:** Background Installation must be **OFF**, and the PKG **`APP_VER`** must be higher than what is installed (check footer in-app or reinstall after `legacy-titles remove`).
 
 5. **Library → PS4 Linux** → **Cross** to boot; **Triangle** for settings.
 
@@ -49,7 +56,8 @@ Or install [OpenOrbis PS4 Toolchain macOS PKG](https://github.com/OpenOrbis/Open
 | Issue | Fix |
 | --- | --- |
 | **`APP_VER` missing** | 8-char values do not fit **`param.sfo`**; toolchain dropped **`APP_VER`** |
-| **`VERSION` never bumped** | Installer saw same master revision (`01.00`) every time — now **`VERSION=01.{build}`** per Mac build |
+| **`VERSION` never bumped** | Installer saw same master revision (`01.00`) every time — now **`VERSION`** tracks build (**`02.xx`** from build 80+) |
+| **`00.80` not over `00.79`** | From build 80+, **`APP_VER`** uses **`01.xx`** (not **`00.xx`**) for clearer GoldHEN upgrade |
 | **Semver in `VERSION`** | Use Sony-style fields; **`APP_VER`** stays **`XX.YY`** (7 chars max) |
 | **GoldHEN background install** | Turn off in Debug Settings (above) |
 | **Ghost `CSTP00001` entry** | New pre-release ID **`CSTP00002`** + delete old tile if needed |
@@ -70,16 +78,18 @@ Library tile uses **`sce_sys/icon0.png`** (512×512). Source: [Wikimedia — Tux
 
 ## Debug log (FTP)
 
-The app appends errors and key events to **`/user/app/CSTP00002/ps4-linux-app.log`** first (title install dir, GoldHEN FTP), then **`/user/.ps4-linux-app.log`**, **`/user/data/ps4-linux-app.log`**, **`/data/pkg/ps4-linux-app.log`**. The **eboot** chain also writes **`eboot: …`** lines before **`guest.elf`** starts — if you only see eboot lines, **`LoadExec`** failed.
+The app appends errors and key events to **`/user/app/CSTP00003/ps4-linux-app.log`** first, then **`/data/linux/boot/ps4-linux-app.log`**, **`/user/data/ps4-linux-app.log`**. Look for **`app: guest main entered`**. **`eboot:`** lines only → **`LoadExec`** did not hand off.
 
 ## Source
 
-`ps4-linux-launcher-app/linux-loader/` — fork of [ps4-payload-guest](https://github.com/Al-Azif/ps4-payload-guest) (GPL-3.0), view replaced by **`LinuxLoaderView`**.
+**Layout (v0.7.59+):** **Unified `eboot.bin`** (OpenOrbis standard, full UI in one FSELF). Kernel loader dynlinks PLT — no split **`guest.oelf`**, no **`guestPlainLoaderRun`** (**CE-34878-0**). See **`docs/PS4-HOMEBREW-LOADER-PATTERNS.md`**. **Delete tile** before install if switching from an old split-chain build.
+
+**CE-41839-5:** Usually invalid SELF/PKG — not eboot size (Apollo ~6.5 MiB eboot works on the same console).
 
 ## IDs (pre-release 0.7)
 
 | | |
 | --- | --- |
-| TITLE_ID | `CSTP00002` |
-| CONTENT_ID | `IV0000-CSTP00002_00-PS4LINUXL0700000` |
-| Legacy (remove from Library) | `CSTP00001` / `IV0000-CSTP00001_00-PS4LINUXLDR00000` |
+| TITLE_ID | `CSTP00003` |
+| CONTENT_ID | `IV0000-CSTP00003_00-PS4LINUXL0700001` |
+| Legacy (remove from Library) | `CSTP00002`, `CSTP00001` |

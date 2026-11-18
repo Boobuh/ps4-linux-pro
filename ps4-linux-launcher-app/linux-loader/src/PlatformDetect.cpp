@@ -129,14 +129,14 @@ PlatformInfo DetectPlatform() {
 void ApplyRecommendedDefaults(LinuxBootConfig &cfg, const PlatformInfo &info) {
   cfg.verboseBoot = true;
   cfg.installTarget = InstallTarget::InternalHdd;
-  cfg.archGb = 50;
+  cfg.archGb = LinuxBootConfig::kArchGbDefault;
   cfg.vramMb = 1024;
   cfg.payload = PayloadProfile::Auto;
 
   switch (info.southbridge) {
   case SouthbridgeKind::Baikal:
     cfg.vramMb = 1024;
-    cfg.payload = PayloadProfile::Generic1024Mb;
+    cfg.payload = PayloadProfile::ProBaikal1Gb;
     break;
   case SouthbridgeKind::Belize:
     cfg.vramMb = 1024;

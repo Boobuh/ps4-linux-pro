@@ -63,8 +63,14 @@ func bumpPkgVersion(loaderDir: URL, bump: Bool) throws -> (display: String, sony
 
     let display = "\(parts[0]).\(parts[1]).\(parts[2])"
     let buildLabel = String(buildNum)
-    let sonyAppVer = String(format: "%02d.%02d", buildNum / 100, buildNum % 100)
-    let masterVersion = String(format: "01.%d", buildNum)
+    let unified: String
+    if buildNum >= 80 {
+        unified = String(format: "02.%02d", buildNum - 69)
+    } else {
+        unified = String(format: "%02d.%02d", buildNum / 100, buildNum % 100)
+    }
+    let sonyAppVer = unified
+    let masterVersion = unified
 
     try display.write(to: versionFile, atomically: true, encoding: .utf8)
     try "\(buildNum)\n".write(to: buildFile, atomically: true, encoding: .utf8)
@@ -102,7 +108,16 @@ func ensureToolchain() throws {
     if try run("/usr/bin/unzip", ["-q", "-o", zip.path, "-d", toolchainDir.deletingLastPathComponent().path]) != 0 {
         throw NSError(domain: "ps4-linux-launcher-build", code: 2, userInfo: [NSLocalizedDescriptionKey: "Toolchain unzip failed"])
     }
-    let innerTar = toolchainDir.deletingLastPathComponent().appendingPathComponent("toolchain-llvm-18.tar.gz")
+    let parent = toolchainDir.deletingLastPathComponent()
+    let nestedZipLayout = parent.appendingPathComponent("OpenOrbis/PS4Toolchain", isDirectory: true)
+    if FileManager.default.fileExists(atPath: nestedZipLayout.path) {
+        if FileManager.default.fileExists(atPath: toolchainDir.path) {
+            try FileManager.default.removeItem(at: toolchainDir)
+        }
+        try FileManager.default.moveItem(at: nestedZipLayout, to: toolchainDir)
+        try? FileManager.default.removeItem(at: parent.appendingPathComponent("OpenOrbis"))
+    }
+    let innerTar = parent.appendingPathComponent("toolchain-llvm-18.tar.gz")
     if FileManager.default.fileExists(atPath: innerTar.path) {
         if FileManager.default.fileExists(atPath: toolchainDir.path) {
             try FileManager.default.removeItem(at: toolchainDir)
@@ -164,6 +179,17 @@ func ensureLLVM() throws -> (cc: String, cxx: String, ld: String) {
     return (clang.path, llvmRoot.appendingPathComponent("bin/clang++").path, llvmRoot.appendingPathComponent("bin/ld.lld").path)
 }
 
+/// Prefer Linux `create-fself` in Docker on macOS (SELF headers closer to Apollo); fallback to create-fself-macos.
+func resolveFselfWrapper(repo: URL) -> String? {
+    let docker = "/usr/bin/docker"
+    guard FileManager.default.isExecutableFile(atPath: docker) else { return nil }
+    let status = (try? run(docker, ["info"], live: false)) ?? 1
+    guard status == 0 else { return nil }
+    let wrapper = repo.appendingPathComponent("tools/create-fself-linux-docker.sh")
+    guard FileManager.default.isExecutableFile(atPath: wrapper.path) else { return nil }
+    return wrapper.path
+}
+
 /// Human-readable PKG name (CONTENT_ID inside unchanged). Example: PS4-Linux-v0.7.5-b75-APP0075.pkg
 func versionedPkgFileName(display: String, buildLabel: String, sonyAppVer: String) -> String {
     let appDigits = sonyAppVer.replacingOccurrences(of: ".", with: "")
@@ -171,7 +197,7 @@ func versionedPkgFileName(display: String, buildLabel: String, sonyAppVer: Strin
 }
 
 func canonicalContentPkgName() -> String {
-    "IV0000-CSTP00002_00-PS4LINUXL0700000.pkg"
+    "IV0000-CSTP00003_00-PS4LINUXL0700001.pkg"
 }
 
 /// Copy OpenOrbis output to versioned filename; drop older PS4-Linux-v*.pkg in the same folder.
@@ -217,15 +243,21 @@ do {
         "OO_PS4_TOOLCHAIN": toolchainDir.path,
         "CC": clang.cc,
         "CXX": clang.cxx,
-        "LD": clang.ld,
+        "PS4LINUX_LD": clang.ld,
         "PKG_LABEL": pkgVersion,
         "MASTER_VERSION": masterVersion,
         "APP_VER_VALUE": sonyAppVer,
+        // Incremental restore: 1=thin, 11=module probe, 2+=UI (see Makefile).
+        "PS4LINUX_RESTORE_STAGE": ProcessInfo.processInfo.environment["PS4LINUX_RESTORE_STAGE"] ?? "2",
+        // Match linux-loader/Makefile default (1). "0" only via explicit env (CE-34878 bisect).
+        "PS4LINUX_TV_REMOTE_INPUT": ProcessInfo.processInfo.environment["PS4LINUX_TV_REMOTE_INPUT"] ?? "1",
     ]
     step(3, 4, "make clean && make all (linux-loader PKG)")
     print("  OO_PS4_TOOLCHAIN=\(toolchainDir.path)")
     print("  CC=\(clang.cc)")
     print("  PKG_LABEL=\(pkgVersion) MASTER_VERSION=\(masterVersion) APP_VER=\(sonyAppVer)")
+    print("  PS4LINUX_TV_REMOTE_INPUT=\(makeEnv["PS4LINUX_TV_REMOTE_INPUT"] ?? "?")")
+    print("  FSELF: tools/ps4-linux-fself.sh (create-fself only — never ps4-linux-make-fself.py)")
     fflush(stdout)
     let status = try run("/usr/bin/make", ["-C", loaderDir.path, "clean", "all"], env: makeEnv)
     if status != 0 {
@@ -237,6 +269,16 @@ do {
         loaderDir: loaderDir, display: pkgVersion, buildLabel: buildLabel, sonyAppVer: sonyAppVer
     )
     let pkg = versioned
+    let layoutCheck = repo.appendingPathComponent("tools/PS4LinuxTools")
+    let layoutStatus = try run(
+        "/usr/bin/swift",
+        ["run", "--package-path", layoutCheck.path, "ps4-linux-layout-check", loaderDir.path],
+        live: true
+    )
+    if layoutStatus != 0 {
+        fputs("PkgLayoutGuard failed — refusing to ship PKG (see tmp/docs/PS4-LINUX-INTERNAL-RUNBOOK.md)\n", stderr)
+        exit(layoutStatus)
+    }
     if FileManager.default.fileExists(atPath: pkg.path) {
         print("Built (install this file): \(pkg.path)")
         print("  CONTENT_ID pkg: \(loaderDir.appendingPathComponent(canonicalContentPkgName()).path)")
@@ -265,11 +307,14 @@ do {
                 fputs("ERROR: param.sfo VERSION mismatch (expected \(masterVersion))\n\(out)\n", stderr)
                 exit(1)
             }
-            if out.contains("APP_VER :") && out.contains("VERSION :") {
-                if let appLine = out.split(separator: "\n").first(where: { $0.contains("APP_VER :") }),
-                   let verLine = out.split(separator: "\n").first(where: { $0.contains("VERSION :") && !$0.contains("APP_VER") }),
-                   appLine == verLine {
-                    fputs("ERROR: APP_VER must differ from VERSION (Sony / Orbis rule)\n", stderr)
+            if let appLine = out.split(separator: "\n").first(where: { $0.contains("APP_VER :") }),
+               let verLine = out.split(separator: "\n").first(where: { $0.contains("VERSION :") && !$0.contains("APP_VER") }) {
+                func sfoVal(_ line: Substring) -> String? {
+                    guard let eq = line.range(of: " = ") else { return nil }
+                    return String(line[eq.upperBound...]).trimmingCharacters(in: .whitespaces)
+                }
+                if let app = sfoVal(appLine), let ver = sfoVal(verLine), app != ver {
+                    fputs("ERROR: APP_VER and VERSION must match for GoldHEN updates (APP \(app), VERSION \(ver))\n\(out)\n", stderr)
                     exit(1)
                 }
             }

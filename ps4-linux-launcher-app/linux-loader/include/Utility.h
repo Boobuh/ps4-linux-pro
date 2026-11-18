@@ -9,8 +9,10 @@
 // #include <orbis/_types/ime_dialog.h>
 
 #include <cstddef>
+#include <cstdint>
 #include <memory>
 #include <string>
+#include <vector>
 
 #include "App.h"
 
@@ -29,6 +31,8 @@ public:
   static std::string LastChars(std::string p_Input, int p_Num);
   static void SanitizeJsonString(std::string &p_Input);
   static std::wstring StrToWstr(const std::string &p_Input);
+  /// UTF-8 → Unicode code points (PS4-safe; do not use mbstowcs for FreeType).
+  static std::vector<uint32_t> Utf8Codepoints(const std::string &p_Input);
 
   static bool IsPS5();
   static bool IsJailbroken();

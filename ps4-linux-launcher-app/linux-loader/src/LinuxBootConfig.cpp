@@ -1,3 +1,7 @@
+#if defined(PS4LINUX_BOOT_CONFIG_LITE)
+// Built from LinuxBootConfigLite.cpp when PS4LINUX_BOOT_CONFIG_LITE is set.
+#else
+
 #include "LinuxBootConfig.h"
 
 #include <unistd.h>
@@ -12,6 +16,23 @@
 #include "AppFileLog.h"
 
 static bool pathReadable(const char *p) { return p != nullptr && access(p, R_OK) == 0; }
+
+int LinuxBootConfig::ClampArchGb(int gb) {
+  if (gb < kArchGbMin) {
+    return kArchGbMin;
+  }
+  if (gb > kArchGbMax) {
+    return kArchGbMax;
+  }
+  return gb;
+}
+
+void LinuxBootConfig::Normalize() {
+  archGb = ClampArchGb(archGb);
+  if (vramMb != 512 && vramMb != 1024 && vramMb != 2048 && vramMb != 4096) {
+    vramMb = (vramMb < 768) ? 512 : 1024;
+  }
+}
 
 void LinuxBootConfig::Load() {
   std::string raw;
@@ -46,6 +67,7 @@ void LinuxBootConfig::Load() {
     const std::string t = j["install_target"].get<std::string>();
     installTarget = (t == "usb") ? InstallTarget::UsbStick : InstallTarget::InternalHdd;
   }
+  Normalize();
 }
 
 bool LinuxBootConfig::Save() const {
@@ -111,11 +133,11 @@ std::string LinuxBootConfig::ResolvePayloadPath() const {
   }
 
   if (use == PayloadProfile::ProBaikal1Gb) {
-    return pick("/data/payloads/payload-1100-1gb-pro-baikal.bin", "/data/payloads/linux-1gb-pro-baikal.bin",
-                "/data/payloads/linux-1024mb.elf", "/data/payloads/linux-1024mb.bin");
+    return pick("/data/payloads/linux-1024mb.bin", "/data/payloads/payload-1100-1gb-pro-baikal.bin",
+                "/data/payloads/linux-1gb-pro-baikal.bin", "/data/payloads/linux-1024mb.elf");
   }
-  return pick("/data/payloads/linux-1024mb.elf", "/data/payloads/linux-1024mb.bin",
-              "/data/payloads/payload-1100-1gb-pro-baikal.bin", "/data/payloads/linux-1gb-pro-baikal.bin");
+  return pick("/data/payloads/linux-1024mb.bin", "/data/payloads/payload-1100-1gb-pro-baikal.bin",
+              "/data/payloads/linux-1gb-pro-baikal.bin", "/data/payloads/linux-1024mb.elf");
 }
 
 std::string LinuxBootConfig::BuildBootargs() const {
@@ -128,6 +150,22 @@ std::string LinuxBootConfig::BuildBootargs() const {
     line += " quiet loglevel=3";
   }
   return line;
+}
+
+static bool writeInstallGbOrUseExisting(const std::string &gb) {
+  if (Utility::WriteTextFile("/data/linux/boot/ps4-install-gb.txt", gb)) {
+    return true;
+  }
+  if (Utility::WriteTextFile("/user/system/boot/ps4-install-gb.txt", gb)) {
+    return true;
+  }
+  if (pathReadable("/data/linux/boot/ps4-install-gb.txt") ||
+      pathReadable("/user/system/boot/ps4-install-gb.txt")) {
+    APP_LOG_WARN("WriteBootFiles: ps4-install-gb not writable; using existing file from sync");
+    return true;
+  }
+  APP_LOG_ERRNO("WriteBootFiles ps4-install-gb.txt", errno);
+  return false;
 }
 
 bool LinuxBootConfig::WriteBootFiles() const {
@@ -144,11 +182,8 @@ bool LinuxBootConfig::WriteBootFiles() const {
     APP_LOG_ERRNO("WriteBootFiles bootargs.txt", errno);
     return false;
   }
-  if (installTarget == InstallTarget::InternalHdd) {
-    if (!Utility::WriteTextFile("/user/system/boot/ps4-install-gb.txt", gb)) {
-      APP_LOG_ERRNO("WriteBootFiles ps4-install-gb.txt", errno);
-      return false;
-    }
+  if (installTarget == InstallTarget::InternalHdd && !writeInstallGbOrUseExisting(gb)) {
+    return false;
   }
   if (!Save()) {
     return false;
@@ -156,3 +191,5 @@ bool LinuxBootConfig::WriteBootFiles() const {
   APP_LOG_INFO("WriteBootFiles OK vram=%d arch_gb=%d verbose=%d", vramMb, archGb, verboseBoot ? 1 : 0);
   return true;
 }
+
+#endif // !PS4LINUX_BOOT_CONFIG_LITE
