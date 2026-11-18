@@ -15,6 +15,9 @@
 #include "FailSafe.h"
 #include "Graphics.h"
 #include "LinuxBootConfig.h"
+#include "KernelCatalog.h"
+#include "KernelDownload.h"
+#include "LinuxBootStackCheck.h"
 #include "LinuxInstallDetect.h"
 #include "PlatformDetect.h"
 #include "Resource.h"
@@ -61,15 +64,25 @@ static std::string elfPathForShellcode(const std::string &path) {
   return path;
 }
 
-static bool bootStackReady() {
-  return pathReadable("/data/linux/boot/bzImage") && pathReadable("/data/linux/boot/initramfs.cpio.gz");
-}
-
 static Color dimColor(Color c) {
   c.r = static_cast<uint8_t>(c.r * 3 / 4);
   c.g = static_cast<uint8_t>(c.g * 3 / 4);
   c.b = static_cast<uint8_t>(c.b * 3 / 4);
   return c;
+}
+
+static void drawMenuRow(Graphics *g, Resource *res, int x, int y, int w, const std::string &label, bool selected,
+                        Color fgHi, Color fgDim) {
+  g->DrawRectangle(x, y, w, PS4LINUX_MENU_ROW_H, selected ? PS4LINUX_MENU_ROW_HI : PS4LINUX_MENU_ROW_LO);
+  g->SetFontSize(res->m_Typefaces, DEFAULT_FONT_SIZE);
+  const Color fg = selected ? fgHi : fgDim;
+  g->DrawText(label, res->m_Typefaces, x + PS4LINUX_MENU_PAD_X, y + PS4LINUX_MENU_PAD_Y, fg, fg);
+}
+
+static void drawHintRow(Graphics *g, Resource *res, int x, int y, int w, const std::string &text, Color fg) {
+  g->DrawRectangle(x, y, w, PS4LINUX_HINT_ROW_H, PS4LINUX_HINT_ROW_BG);
+  g->SetFontSize(res->m_Typefaces, DEFAULT_FONT_SIZE - 2);
+  g->DrawText(text, res->m_Typefaces, x + PS4LINUX_MENU_PAD_X, y + PS4LINUX_HINT_PAD_Y, fg, fg);
 }
 
 /// GoldHEN socket needs a real kexec `.bin` (not ELF/FSELF). `linux-1024mb.bin` from sync is often ELF bytes.
@@ -130,16 +143,27 @@ void LinuxLoaderView::RefreshPaths() {
     m_StatusLine = std::string("Loader: ") + m_PayloadPath;
   }
 
-  if (bootStackReady()) {
-    m_BootCheckLine = m_Install.summaryLine;
+  const BootStackStatus stack = InspectBootStack();
+  if (stack.ReadyForLaunch()) {
+    m_BootCheckLine = stack.StatusLine();
+    if (!m_Install.IsReady()) {
+      m_BootCheckLine += " | ";
+      m_BootCheckLine += m_Install.summaryLine;
+    }
   } else {
-    m_BootCheckLine = "Missing bzImage/initramfs — run: swift tools/ps4-linux-sync.swift sync";
+    m_BootCheckLine = stack.StatusLine();
   }
+  APP_LOG_INFO("Boot stack: kernel=%lld ok=%d initramfs=%lld ok=%d",
+               static_cast<long long>(stack.kernelBytes), stack.kernelSizeOk ? 1 : 0,
+               static_cast<long long>(stack.initramfsBytes), stack.initramfsSizeOk ? 1 : 0);
 
   std::string hw;
   Utility::StrSprintf(hw, "Board: %s | Install %d GB | VRAM %d MB | %s", m_Platform.southbridgeName.c_str(),
                       m_Config.archGb, m_Config.vramMb, m_Config.verboseBoot ? "verbose HDMI" : "quiet boot");
   m_HardwareLine = hw;
+  if (!m_Install.archImgPath.empty()) {
+    APP_LOG_INFO("Install arch path: %s", m_Install.archImgPath.c_str());
+  }
 }
 
 void LinuxLoaderView::PersistConfigChoice(const char *what) {
@@ -166,7 +190,7 @@ void LinuxLoaderView::OpenInstallGbPicker() {
   }
 }
 
-int LinuxLoaderView::MainMenuCount() const { return m_Install.IsReady() ? 5 : 4; }
+int LinuxLoaderView::MainMenuCount() const { return m_Install.IsReady() ? 6 : 5; }
 
 LinuxLoaderView::MainMenuAction LinuxLoaderView::ActionForMenuIndex(int index) const {
   if (m_Install.IsReady()) {
@@ -179,6 +203,8 @@ LinuxLoaderView::MainMenuAction LinuxLoaderView::ActionForMenuIndex(int index) c
       return MainMenuAction::InstallGb;
     case 3:
       return MainMenuAction::Vram;
+    case 4:
+      return MainMenuAction::DownloadKernel;
     default:
       return MainMenuAction::Refresh;
     }
@@ -190,6 +216,8 @@ LinuxLoaderView::MainMenuAction LinuxLoaderView::ActionForMenuIndex(int index) c
     return MainMenuAction::InstallGb;
   case 2:
     return MainMenuAction::Vram;
+  case 3:
+    return MainMenuAction::DownloadKernel;
   default:
     return MainMenuAction::Refresh;
   }
@@ -214,18 +242,47 @@ void LinuxLoaderView::BuildMenuLine(int index, bool selected, std::string &outLi
   case MainMenuAction::InstallGb:
     title = "Install partition size";
     std::snprintf(detail, sizeof(detail), " — %d GB", m_Config.archGb);
-    outLine = std::string(selected ? "> " : "  ") + title + detail;
+    outLine = std::string(title) + detail;
     return;
   case MainMenuAction::Vram:
     title = "Linux RAM (VRAM)";
     std::snprintf(detail, sizeof(detail), " — %d MB", m_Config.vramMb);
-    outLine = std::string(selected ? "> " : "  ") + title + detail;
+    outLine = std::string(title) + detail;
+    return;
+  case MainMenuAction::DownloadKernel:
+    title = "Download kernel";
+    outLine = std::string(title) + " → /data/linux/boot/bzImage";
     return;
   case MainMenuAction::Refresh:
     title = "Refresh status";
     break;
   }
-  outLine = std::string(selected ? "> " : "  ") + title;
+  (void)selected;
+  outLine = title;
+}
+
+void LinuxLoaderView::OpenKernelPicker() {
+  APP_LOG_INFO("UI: kernel picker opened");
+  m_SubScreen = SubScreen::PickKernel;
+  m_PickerSelected = 0;
+}
+
+void LinuxLoaderView::RunKernelDownload(int catalogIndex) {
+  const KernelCatalogEntry &e = KernelCatalog::Entry(catalogIndex);
+  BeginLaunchBlockUi("Downloading kernel via HTTPS…");
+  m_Launching = true;
+  APP_LOG_INFO("Kernel download start: %s", e.title);
+  const KernelDownloadResult r = KernelDownload::DownloadEntry(e);
+  m_Launching = false;
+  if (r.ok) {
+    m_LaunchBlockUi = false;
+    char msg[128];
+    std::snprintf(msg, sizeof(msg), "Kernel installed (%lld B)", static_cast<long long>(r.bytesWritten));
+    PersistConfigChoice(msg);
+    notifi(NULL, "%s", msg);
+    return;
+  }
+  EndLaunchBlockUiFailed(r.error.empty() ? "Kernel download failed" : r.error.c_str());
 }
 
 void LinuxLoaderView::OpenVramPicker() {
@@ -251,7 +308,7 @@ int LinuxLoaderView::UpdateSubScreen() {
       m_App->Ctrl->ConsumeMenuConfirm();
       BeginLaunchBlockUi("Preparing fresh internal HDD install…");
       m_Launching = true;
-      LaunchLinuxPayload(true);
+      LaunchLinuxPayload(LaunchIntent::Reinstall);
       m_Launching = false;
     }
     return 0;
@@ -278,8 +335,12 @@ int LinuxLoaderView::UpdateSubScreen() {
     return 0;
   }
 
-  const int pickerCount =
-      (m_SubScreen == SubScreen::PickInstallGb) ? kArchPickerCount : kVramOptionCount;
+  int pickerCount = kVramOptionCount;
+  if (m_SubScreen == SubScreen::PickInstallGb) {
+    pickerCount = kArchPickerCount;
+  } else if (m_SubScreen == SubScreen::PickKernel) {
+    pickerCount = KernelCatalog::Count();
+  }
 
   if (m_App->Ctrl->GetButtonPressed(ORBIS_PAD_BUTTON_UP) && m_PickerSelected > 0) {
     m_PickerSelected--;
@@ -311,6 +372,13 @@ int LinuxLoaderView::UpdateSubScreen() {
     m_Config.vramMb = kVramOptions[m_PickerSelected];
     PersistConfigChoice("Linux RAM saved");
     m_SubScreen = SubScreen::None;
+    return 0;
+  }
+
+  if (m_SubScreen == SubScreen::PickKernel) {
+    m_SubScreen = SubScreen::None;
+    RunKernelDownload(m_PickerSelected);
+    return 0;
   }
   return 0;
 }
@@ -320,50 +388,65 @@ int LinuxLoaderView::RenderSubScreen() {
   Color titleC = {0xFF, 0xFF, 0xFF, 0xFF};
   Color hi = {0x44, 0xFF, 0xAA, 0xFF};
   Color dim = {0x66, 0x88, 0xAA, 0xFF};
-  Color rowHi = {0x28, 0x58, 0x88, 0xFF};
-  Color rowLo = {0x10, 0x32, 0x72, 0xFF};
 
   m_App->Graph->FrameBufferFill(bg);
   m_App->Graph->SetFontSize(m_App->Res->m_Typefaces, HEADER_FONT_SIZE);
 
+  const int menuW = m_App->Graph->GetScreenWidth() - (BORDER_X * 2);
+
   if (m_SubScreen == SubScreen::ConfirmReinstall) {
     m_App->Graph->DrawText("Wipe and reinstall?", m_App->Res->m_Typefaces, BORDER_X, 80, titleC, titleC);
     m_App->Graph->SetFontSize(m_App->Res->m_Typefaces, DEFAULT_FONT_SIZE);
-    m_App->Graph->DrawText("Deletes /user/home/Arch.img and install logs.", m_App->Res->m_Typefaces, BORDER_X, 160,
-                           hi, hi);
-    m_App->Graph->DrawText("Next boot runs a full install at your chosen GB size.", m_App->Res->m_Typefaces, BORDER_X,
-                           200, dim, dim);
-    m_App->Graph->DrawText("OK/Cross: wipe and install   Circle: cancel", m_App->Res->m_Typefaces, BORDER_X, 280, dim,
-                           dim);
+    drawMenuRow(m_App->Graph, m_App->Res, BORDER_X, 160, menuW, "Deletes /user/home/Arch.img and install logs.", false,
+                hi, dim);
+    drawMenuRow(m_App->Graph, m_App->Res, BORDER_X, 160 + PS4LINUX_MENU_ROW_H + PS4LINUX_MENU_ROW_GAP, menuW,
+                "Next boot runs a full install at your chosen GB size.", false, hi, dim);
+    drawHintRow(m_App->Graph, m_App->Res, BORDER_X, 300, menuW, "OK/Cross: wipe and install", hi);
+    drawHintRow(m_App->Graph, m_App->Res, BORDER_X, 300 + PS4LINUX_HINT_ROW_H + PS4LINUX_MENU_ROW_GAP, menuW,
+                "Circle: cancel", dim);
     return 0;
   }
 
   if (m_SubScreen == SubScreen::AdjustInstallGb) {
     m_App->Graph->DrawText("Custom install size", m_App->Res->m_Typefaces, BORDER_X, 80, titleC, titleC);
-    m_App->Graph->SetFontSize(m_App->Res->m_Typefaces, DEFAULT_FONT_SIZE);
     char line[96];
     std::snprintf(line, sizeof(line), "Partition: %d GB  (min %d, default %d)", m_ManualArchGb,
                   LinuxBootConfig::kArchGbMin, LinuxBootConfig::kArchGbDefault);
-    m_App->Graph->DrawText(line, m_App->Res->m_Typefaces, BORDER_X, 160, hi, hi);
-    m_App->Graph->DrawText("Left/Right: ±10 GB   OK/Cross: save   Circle: cancel", m_App->Res->m_Typefaces, BORDER_X,
-                           220, dim, dim);
+    drawMenuRow(m_App->Graph, m_App->Res, BORDER_X, 160, menuW, line, true, hi, dim);
+    drawHintRow(m_App->Graph, m_App->Res, BORDER_X, 240, menuW, "Left/Right: ±10 GB", dim);
+    drawHintRow(m_App->Graph, m_App->Res, BORDER_X, 240 + PS4LINUX_HINT_ROW_H + PS4LINUX_MENU_ROW_GAP, menuW,
+                "OK/Cross: save   Circle: cancel", dim);
     return 0;
   }
 
-  const char *title = (m_SubScreen == SubScreen::PickInstallGb) ? "Install partition size" : "Linux RAM (loader VRAM)";
+  const char *title = "Linux RAM (loader VRAM)";
+  if (m_SubScreen == SubScreen::PickInstallGb) {
+    title = "Install partition size";
+  } else if (m_SubScreen == SubScreen::PickKernel) {
+    title = "Download kernel";
+  }
   m_App->Graph->DrawText(title, m_App->Res->m_Typefaces, BORDER_X, 80, titleC, titleC);
   m_App->Graph->SetFontSize(m_App->Res->m_Typefaces, DEFAULT_FONT_SIZE - 2);
-  m_App->Graph->DrawText("Used before Start Linux — saved to ps4-install-gb.txt / vram.txt", m_App->Res->m_Typefaces,
-                         BORDER_X, 118, dim, dim);
+  const char *subtitle =
+      (m_SubScreen == SubScreen::PickKernel)
+          ? "PS4 online required. Saves to /data/linux/boot/bzImage (initramfs still from Mac sync)."
+          : "Used before Start Linux — saved to ps4-install-gb.txt / vram.txt";
+  m_App->Graph->DrawText(subtitle, m_App->Res->m_Typefaces, BORDER_X, 118, dim, dim);
 
   const int rowY0 = 170;
-  const int rowH = 40;
-  const int pickerCount =
-      (m_SubScreen == SubScreen::PickInstallGb) ? kArchPickerCount : kVramOptionCount;
+  const int rowStep = PS4LINUX_MENU_ROW_H + PS4LINUX_MENU_ROW_GAP;
+  int pickerCount = kVramOptionCount;
+  if (m_SubScreen == SubScreen::PickInstallGb) {
+    pickerCount = kArchPickerCount;
+  } else if (m_SubScreen == SubScreen::PickKernel) {
+    pickerCount = KernelCatalog::Count();
+  }
 
   for (int i = 0; i < pickerCount; i++) {
     char label[96];
-    if (m_SubScreen == SubScreen::PickInstallGb) {
+    if (m_SubScreen == SubScreen::PickKernel) {
+      std::snprintf(label, sizeof(label), "%s", KernelCatalog::Entry(i).title);
+    } else if (m_SubScreen == SubScreen::PickInstallGb) {
       if (i == kArchPickerCustomIndex) {
         std::snprintf(label, sizeof(label), "Custom (fine-tune, min %d GB)", LinuxBootConfig::kArchGbMin);
       } else {
@@ -374,19 +457,16 @@ int LinuxLoaderView::RenderSubScreen() {
       std::snprintf(label, sizeof(label), "%d MB%s", kVramOptions[i], kVramOptions[i] == 1024 ? " (Baikal Pro)" : "");
     }
     const bool sel = (i == m_PickerSelected);
-    const std::string row = std::string(sel ? "> " : "  ") + label;
-    m_App->Graph->DrawRectangle(BORDER_X, rowY0 + i * rowH, 920, rowH - 4, sel ? rowHi : rowLo);
-    m_App->Graph->DrawText(row, m_App->Res->m_Typefaces, BORDER_X + 8, rowY0 + i * rowH + 8, sel ? hi : dim,
-                           sel ? hi : dim);
+    drawMenuRow(m_App->Graph, m_App->Res, BORDER_X, rowY0 + i * rowStep, menuW, label, sel, hi, dim);
   }
 
+  const int hintsY = rowY0 + pickerCount * rowStep + PS4LINUX_MENU_ROW_GAP;
   m_App->Graph->SetFontSize(m_App->Res->m_Typefaces, DEFAULT_FONT_SIZE - 2);
   if (m_App->Ctrl->HasTvRemotePad()) {
-    m_App->Graph->DrawText("Up/Down move   Hold Down ~1s = confirm   Options key ignored", m_App->Res->m_Typefaces,
-                           BORDER_X, 520, dim, dim);
+    drawHintRow(m_App->Graph, m_App->Res, BORDER_X, hintsY, menuW,
+                "Up/Down move   Hold Down ~1s = confirm   Options key ignored", dim);
   } else {
-    m_App->Graph->DrawText("Up/Down   OK/Cross confirm   Circle back", m_App->Res->m_Typefaces, BORDER_X, 520, dim,
-                           dim);
+    drawHintRow(m_App->Graph, m_App->Res, BORDER_X, hintsY, menuW, "Up/Down   OK/Cross confirm   Circle back", dim);
   }
   return 0;
 }
@@ -442,46 +522,78 @@ int LinuxLoaderView::RenderLaunchBlockUi() {
   m_App->Graph->DrawText(m_LaunchPhaseLine, m_App->Res->m_Typefaces, BORDER_X, 150,
                          m_LaunchFailed ? warn : sub, m_LaunchFailed ? warn : sub);
 
-  const int barX = BORDER_X;
+  const int menuW = m_App->Graph->GetScreenWidth() - (BORDER_X * 2);
+  const int barX = BORDER_X + PS4LINUX_MENU_PAD_X / 2;
   const int barY = 220;
-  const int barW = 920;
-  const int barH = 28;
+  const int barW = menuW - PS4LINUX_MENU_PAD_X;
+  const int barH = PS4LINUX_HINT_ROW_H;
   const float progress = LaunchProgress01();
   m_App->Graph->DrawRectangle(barX, barY, barW, barH, barBg);
-  const int fillW = static_cast<int>(barW * progress);
+  const int fillInset = 4;
+  const int fillW = static_cast<int>((barW - fillInset * 2) * progress);
   if (fillW > 0) {
-    m_App->Graph->DrawRectangle(barX, barY, fillW, barH, barFill);
+    m_App->Graph->DrawRectangle(barX + fillInset, barY + fillInset, fillW, barH - fillInset * 2, barFill);
   }
 
   char pct[32];
   std::snprintf(pct, sizeof(pct), "%d%%", static_cast<int>(progress * 100.0f + 0.5f));
   m_App->Graph->SetFontSize(m_App->Res->m_Typefaces, DEFAULT_FONT_SIZE - 2);
-  m_App->Graph->DrawText(pct, m_App->Res->m_Typefaces, barX + barW - 56, barY + 4, sub, sub);
+  m_App->Graph->DrawText(pct, m_App->Res->m_Typefaces, barX + barW - 72, barY + PS4LINUX_HINT_PAD_Y, sub, sub);
+
+  const int hintStep = PS4LINUX_HINT_ROW_H + PS4LINUX_MENU_ROW_GAP;
+  int hintY = 280;
 
   if (!m_LaunchFailed && m_BootInProgress) {
-    m_App->Graph->SetFontSize(m_App->Res->m_Typefaces, DEFAULT_FONT_SIZE);
-    m_App->Graph->DrawText("HDMI may go blank 3–5 min, then Step 1/2/3 on internal HDD.", m_App->Res->m_Typefaces,
-                           BORDER_X, 280, sub, sub);
-    m_App->Graph->DrawText("Full HDD install often 30–90+ min. Do not power off during steps.", m_App->Res->m_Typefaces,
-                           BORDER_X, 320, warn, warn);
-    m_App->Graph->DrawText("If you are still in this app, kexec did not run — Circle to dismiss and fix BinLoader.",
-                           m_App->Res->m_Typefaces, BORDER_X, 360, dimColor(sub), dimColor(sub));
+    if (m_LastLaunchIntent == LaunchIntent::Boot) {
+      drawHintRow(m_App->Graph, m_App->Res, BORDER_X, hintY, menuW,
+                  "Booting installed Linux — HDMI may go blank 1–3 min, then desktop.", sub);
+      hintY += hintStep;
+      drawHintRow(m_App->Graph, m_App->Res, BORDER_X, hintY, menuW, "No reinstall — Arch.img on internal HDD is used as-is.",
+                  sub);
+      hintY += hintStep;
+    } else {
+      drawHintRow(m_App->Graph, m_App->Res, BORDER_X, hintY, menuW,
+                  "HDMI may go blank 3–5 min, then Step 1/2/3 on internal HDD.", sub);
+      hintY += hintStep;
+      drawHintRow(m_App->Graph, m_App->Res, BORDER_X, hintY, menuW,
+                  "Full HDD install often 30–90+ min. Do not power off during steps.", warn);
+      hintY += hintStep;
+    }
+    drawHintRow(m_App->Graph, m_App->Res, BORDER_X, hintY, menuW,
+                "If you are still in this app, kexec did not run — Circle to dismiss and fix BinLoader.",
+                dimColor(sub));
   }
 
   if (m_LaunchFailed) {
-    m_App->Graph->DrawText("Fix on PS4: GoldHEN → Servers → BinLoader ON (port 9090), then retry.",
-                           m_App->Res->m_Typefaces, BORDER_X, 280, warn, warn);
-    m_App->Graph->DrawText("Circle / Back: return to menu", m_App->Res->m_Typefaces, BORDER_X, h - 80, sub, sub);
+    drawHintRow(m_App->Graph, m_App->Res, BORDER_X, hintY, menuW,
+                "Fix on PS4: GoldHEN → Servers → BinLoader ON (port 9090), then retry.", warn);
+    drawHintRow(m_App->Graph, m_App->Res, BORDER_X, h - PS4LINUX_HINT_ROW_H - 24, menuW, "Circle / Back: return to menu",
+                sub);
   } else if (m_Launching) {
-    m_App->Graph->DrawText("Please wait — menu is locked while boot files are prepared.", m_App->Res->m_Typefaces,
-                           BORDER_X, 280, sub, sub);
+    drawHintRow(m_App->Graph, m_App->Res, BORDER_X, hintY, menuW,
+                "Please wait — menu is locked while boot files are prepared.", sub);
   }
 
   return 0;
 }
 
-bool LinuxLoaderView::LaunchLinuxPayload(bool wipeForNewInstall) {
-  if (wipeForNewInstall) {
+bool LinuxLoaderView::LaunchLinuxPayload(LaunchIntent intent) {
+  m_LastLaunchIntent = intent;
+  const char *intentTok = "install";
+  switch (intent) {
+  case LaunchIntent::Boot:
+    intentTok = "boot";
+    break;
+  case LaunchIntent::Reinstall:
+    intentTok = "reinstall";
+    break;
+  case LaunchIntent::Install:
+  default:
+    intentTok = "install";
+    break;
+  }
+
+  if (intent == LaunchIntent::Reinstall) {
     m_LaunchPhaseLine = "Removing old Arch.img for fresh install…";
     if (!WipeLinuxInstallForReinstall()) {
       APP_LOG_ERROR("LaunchLinux: wipe for reinstall failed");
@@ -491,7 +603,10 @@ bool LinuxLoaderView::LaunchLinuxPayload(bool wipeForNewInstall) {
     RefreshPaths();
   }
 
-  m_LaunchPhaseLine = "Writing boot files (ps4-install-gb.txt, vram.txt)…";
+  m_LaunchPhaseLine = "Writing launch intent and boot files…";
+  if (!m_Config.WriteLaunchIntent(intentTok)) {
+    APP_LOG_WARN("LaunchLinux: launch intent write failed (continuing)");
+  }
 
   if (m_PayloadPath.empty()) {
     APP_LOG_ERROR("LaunchLinux: no payload path");
@@ -499,9 +614,11 @@ bool LinuxLoaderView::LaunchLinuxPayload(bool wipeForNewInstall) {
     return false;
   }
 
-  if (!bootStackReady()) {
-    APP_LOG_WARN("LaunchLinux: missing bzImage or initramfs under /data/linux/boot/");
-    EndLaunchBlockUiFailed("Missing bzImage or initramfs — run Mac sync to /data/linux/boot/");
+  const BootStackStatus stack = InspectBootStack();
+  if (!stack.ReadyForLaunch()) {
+    const std::string reason = stack.LaunchBlockReason();
+    APP_LOG_WARN("LaunchLinux: boot stack not ready: %s", reason.c_str());
+    EndLaunchBlockUiFailed(reason.c_str());
     return false;
   }
 
@@ -548,7 +665,11 @@ bool LinuxLoaderView::LaunchLinuxPayload(bool wipeForNewInstall) {
     }
     APP_LOG_INFO("LaunchLinux: sent via %s", viaSocket ? "socket" : "shellcode");
     m_BootInProgress = true;
-    m_LaunchPhaseLine = "Kexec sent — waiting for Linux on HDMI (internal HDD install next)…";
+    if (intent == LaunchIntent::Boot) {
+      m_LaunchPhaseLine = "Kexec sent — booting installed Linux on internal HDD…";
+    } else {
+      m_LaunchPhaseLine = "Kexec sent — waiting for Linux on HDMI (internal HDD install next)…";
+    }
   } else {
     APP_LOG_ERROR("LaunchLinux: PS5 not supported");
     EndLaunchBlockUiFailed("PS5 is not supported");
@@ -627,6 +748,10 @@ int LinuxLoaderView::Update() {
     OpenVramPicker();
     m_App->Ctrl->ConsumeMenuConfirm();
     return 0;
+  case MainMenuAction::DownloadKernel:
+    OpenKernelPicker();
+    m_App->Ctrl->ConsumeMenuConfirm();
+    return 0;
   case MainMenuAction::Refresh:
     RefreshPaths();
     notifi(NULL, "Status refreshed");
@@ -648,10 +773,16 @@ int LinuxLoaderView::Update() {
     m_App->Ctrl->ConsumeMenuConfirm();
     return 0;
   }
-  BeginLaunchBlockUi(m_Install.IsReady() ? "Booting installed Linux on internal HDD…"
-                                         : "Starting internal HDD Linux install…");
+  LaunchIntent intent = LaunchIntent::Install;
+  if (m_Install.IsReady()) {
+    intent = LaunchIntent::Boot;
+  } else if (m_Install.IsPartial()) {
+    intent = LaunchIntent::Reinstall;
+  }
+  BeginLaunchBlockUi(intent == LaunchIntent::Boot ? "Booting installed Linux on internal HDD…"
+                                                  : "Starting internal HDD Linux install…");
   m_Launching = true;
-  LaunchLinuxPayload(m_Install.IsPartial());
+  LaunchLinuxPayload(intent);
   m_Launching = false;
   m_App->Ctrl->ConsumeMenuConfirm();
 
@@ -676,49 +807,61 @@ int LinuxLoaderView::Render() {
 
   m_App->Graph->FrameBufferFill(bg);
 
+  const int w = m_App->Graph->GetScreenWidth();
+  const int menuX = PS4LINUX_SAFE_X;
+  const int menuW = (w - menuX * 2 > PS4LINUX_CONTENT_MAX_W) ? PS4LINUX_CONTENT_MAX_W : (w - menuX * 2);
+
   m_App->Graph->SetFontSize(m_App->Res->m_Typefaces, HEADER_FONT_SIZE);
-  m_App->Graph->DrawText("PS4 Linux", m_App->Res->m_Typefaces, BORDER_X, 80, titleC, titleC);
+  m_App->Graph->DrawText("PS4 Linux", m_App->Res->m_Typefaces, menuX, 72, titleC, titleC);
   m_App->Graph->SetFontSize(m_App->Res->m_Typefaces, DEFAULT_FONT_SIZE - 2);
   m_App->Graph->DrawText("Baikal: install and run Linux from internal HDD (no USB during boot)", m_App->Res->m_Typefaces,
-                         BORDER_X, 118, sub, sub);
+                         menuX, 108, sub, sub);
 
-  m_App->Graph->SetFontSize(m_App->Res->m_Typefaces, DEFAULT_FONT_SIZE);
-  m_App->Graph->DrawText(m_HardwareLine, m_App->Res->m_Typefaces, BORDER_X, 160, sub, sub);
-  m_App->Graph->DrawText(m_StatusLine, m_App->Res->m_Typefaces, BORDER_X, 210, sub, sub);
-  m_App->Graph->DrawText(m_BootCheckLine, m_App->Res->m_Typefaces, BORDER_X, 260, bootStackReady() ? sub : warn,
-                         bootStackReady() ? sub : warn);
+  m_App->Graph->SetFontSize(m_App->Res->m_Typefaces, DEFAULT_FONT_SIZE - 2);
+  m_App->Graph->DrawText(m_HardwareLine, m_App->Res->m_Typefaces, menuX, 148, sub, sub);
+  const bool stackOk = InspectBootStack().ReadyForLaunch();
+  if (m_Install.IsReady()) {
+    Color ready = {0x66, 0xFF, 0xAA, 0xFF};
+    m_App->Graph->DrawText(m_Install.summaryLine, m_App->Res->m_Typefaces, menuX, 182, ready, ready);
+    m_App->Graph->DrawText(m_StatusLine, m_App->Res->m_Typefaces, menuX, 216, sub, sub);
+    m_App->Graph->DrawText(m_BootCheckLine, m_App->Res->m_Typefaces, menuX, 250, stackOk ? sub : warn,
+                           stackOk ? sub : warn);
+  } else {
+    m_App->Graph->DrawText(m_StatusLine, m_App->Res->m_Typefaces, menuX, 182, sub, sub);
+    m_App->Graph->DrawText(m_BootCheckLine, m_App->Res->m_Typefaces, menuX, 216, stackOk ? sub : warn,
+                           stackOk ? sub : warn);
+  }
 
   Color hi = {0x44, 0xFF, 0xAA, 0xFF};
   Color dim = {0x66, 0x88, 0xAA, 0xFF};
+  const int rowY0 = 268;
+  const int rowStep = PS4LINUX_MENU_ROW_H + PS4LINUX_MENU_ROW_GAP;
   for (int i = 0; i < MainMenuCount(); i++) {
     const bool sel = (i == m_MenuIndex);
     std::string line;
     BuildMenuLine(i, sel, line);
-    m_App->Graph->DrawText(line, m_App->Res->m_Typefaces, BORDER_X, 300 + i * 36, sel ? hi : dim, sel ? hi : dim);
+    drawMenuRow(m_App->Graph, m_App->Res, menuX, rowY0 + i * rowStep, menuW, line, sel, hi, dim);
   }
 
-  m_App->Graph->DrawText("Set install size & RAM before a new install (min 50 GB, default 100 GB).",
-                         m_App->Res->m_Typefaces, BORDER_X, h - 260, titleC, titleC);
-  m_App->Graph->DrawText(m_Install.IsReady() ? "Boot = kexec into existing Arch.img" : "Install = kexec then HDD format/extract",
-                         m_App->Res->m_Typefaces, BORDER_X, h - 220, sub, sub);
-  if (m_App->Ctrl->HasTvRemotePad()) {
-    m_App->Graph->DrawText("Up/Down: select   Hold Down ~1s on row = confirm   Circle: back", m_App->Res->m_Typefaces,
-                           BORDER_X, h - 200, sub, sub);
-  } else {
-    m_App->Graph->DrawText("Up/Down: select   OK / Cross (Enter): confirm   Circle: back", m_App->Res->m_Typefaces,
-                           BORDER_X, h - 200, sub, sub);
-  }
-#if !defined(PS4LINUX_NO_SETTINGS)
-  m_App->Graph->DrawText("Triangle = settings (lists for each option)", m_App->Res->m_Typefaces, BORDER_X, h - 120, sub,
-                         sub);
-#else
-  m_App->Graph->DrawText("Settings: install stage-3 PKG (full menu)", m_App->Res->m_Typefaces, BORDER_X, h - 120, sub,
-                         sub);
-#endif
-  m_App->Graph->DrawText("Refresh: Square or R / Backspace", m_App->Res->m_Typefaces, BORDER_X, h - 80, sub, sub);
-  m_App->Graph->DrawText("Input: DualShock and HDMI TV remote (e.g. RMT-TX300E) via Bravia Sync", m_App->Res->m_Typefaces,
-                         BORDER_X, h - 40, sub, sub);
+  const int hintStep = PS4LINUX_HINT_ROW_H + PS4LINUX_MENU_ROW_GAP;
+  const int bottomPad = 36;
+  int hintY = h - bottomPad - hintStep;
   std::string verLine = std::string("v") + PS4_LINUX_PKG_VERSION + "  APP " + PS4_LINUX_PKG_APP_VER;
-  m_App->Graph->DrawText(verLine, m_App->Res->m_Typefaces, BORDER_X, h - 8, sub, sub);
+  drawHintRow(m_App->Graph, m_App->Res, menuX, hintY, menuW, verLine, dim);
+  hintY -= hintStep;
+  if (m_App->Ctrl->HasTvRemotePad()) {
+    drawHintRow(m_App->Graph, m_App->Res, menuX, hintY, menuW,
+                "Up/Down select · hold Down ~1s confirm · Circle back · Square refresh", sub);
+  } else {
+    drawHintRow(m_App->Graph, m_App->Res, menuX, hintY, menuW,
+                "Up/Down select · Cross confirm · Circle back · Square refresh", sub);
+  }
+  hintY -= hintStep;
+  drawHintRow(m_App->Graph, m_App->Res, menuX, hintY, menuW,
+              m_Install.IsReady() ? "Boot = kexec into Arch.img on HDD" : "Install = kexec then format + extract arch",
+              sub);
+  hintY -= hintStep;
+  drawHintRow(m_App->Graph, m_App->Res, menuX, hintY, menuW,
+              "Set install size & RAM before install (min 50 GB, default 100 GB).", titleC);
   return 0;
 }

@@ -12,6 +12,8 @@ struct LinuxInstallState {
   int metaArchGb = 0;
   std::string distro;
   std::string summaryLine;
+  /// Orbis path used for Arch.img (e.g. `/user/home/Arch.img`).
+  std::string archImgPath;
 
   bool IsReady() const { return level == LinuxInstallLevel::Ready; }
   bool IsPartial() const { return level == LinuxInstallLevel::Partial; }

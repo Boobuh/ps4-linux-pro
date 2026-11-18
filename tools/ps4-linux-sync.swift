@@ -7,6 +7,8 @@ struct Config {
     var host = ProcessInfo.processInfo.environment["PS4_HOST"] ?? "10.0.1.7"
     var port = 2121
     var installGB = 100
+    /// Bake initramfs stamp + upload HDD enable file for HTTP install log during kexec (port 8765).
+    var installNetDebug: Bool = ProcessInfo.processInfo.environment["PS4LINUX_INSTALL_NETDEBUG"] == "1"
     let assetRoot: URL
 
     init() {
@@ -22,6 +24,8 @@ struct Config {
     static let nazkyInitramfsURL = "https://mega.nz/file/E0wW3a6Y#IE9fvrjZ22Q2mJ6kM1uQaNctwj1-we4cV7xGqPBVV64"
     static let bzImageURL =
         "https://github.com/feeRnt/ps4-linux-12xx/releases/download/v5.4.247__neocine-1.1/bzImage_GCC-11"
+    /// feeRnt neocine Baikal kernel (Gladius / PS4 Pro lineage).
+    static let bzImageExpectedBytes: Int64 = 9_872_896
     static let loaderZipURL =
         "https://github.com/ps4-linux/ps4-linux-loader/releases/download/v25.2/PS4-Linux-Loader-v25.2.zip"
 }
@@ -133,6 +137,11 @@ func buildAutoInitramfs(cfg: Config) throws -> URL {
     try FileManager.default.copyItem(at: overlayBin, to: installDest)
     try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: installDest.path)
 
+    let etcDir = work.appendingPathComponent("etc", isDirectory: true)
+    try FileManager.default.createDirectory(at: etcDir, withIntermediateDirectories: true)
+    let revStamp = etcDir.appendingPathComponent("ps4-linux-install-hdd.rev")
+    try "4\n".write(to: revStamp, atomically: true, encoding: .utf8)
+
     let uiOverlay = cfg.assetRoot.appendingPathComponent("overlays/bin/ps4-linux-ui.sh")
     let uiDest = work.appendingPathComponent("bin/ps4-linux-ui.sh")
     if FileManager.default.fileExists(atPath: uiDest.path) {
@@ -140,6 +149,25 @@ func buildAutoInitramfs(cfg: Config) throws -> URL {
     }
     try FileManager.default.copyItem(at: uiOverlay, to: uiDest)
     try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: uiDest.path)
+
+    let netDebugOverlay = cfg.assetRoot.appendingPathComponent("overlays/bin/ps4-linux-install-netdebug.sh")
+    let netDebugDest = work.appendingPathComponent("bin/ps4-linux-install-netdebug.sh")
+    if FileManager.default.fileExists(atPath: netDebugOverlay.path) {
+        if FileManager.default.fileExists(atPath: netDebugDest.path) {
+            try FileManager.default.removeItem(at: netDebugDest)
+        }
+        try FileManager.default.copyItem(at: netDebugOverlay, to: netDebugDest)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: netDebugDest.path)
+    }
+    let netDebugStamp = etcDir.appendingPathComponent("ps4-linux-install-netdebug")
+    if cfg.installNetDebug {
+        try "1\n".write(to: netDebugStamp, atomically: true, encoding: .utf8)
+        let ndRev = etcDir.appendingPathComponent("ps4-linux-install-netdebug.rev")
+        try "1\n".write(to: ndRev, atomically: true, encoding: .utf8)
+        print("Initramfs: install netdebug enabled (HTTP :8765)")
+    } else if FileManager.default.fileExists(atPath: netDebugStamp.path) {
+        try FileManager.default.removeItem(at: netDebugStamp)
+    }
 
     var initText = try String(contentsOf: work.appendingPathComponent("init"), encoding: .utf8)
     initText = initText.replacingOccurrences(
@@ -172,7 +200,19 @@ func buildAutoInitramfs(cfg: Config) throws -> URL {
     }
     _ = try run("/bin/sh", ["-c", "find . -print0 | cpio -o --null -H newc 2>/dev/null | gzip -9 > '\(out.path)'"], cwd: work, timeout: 600)
     print("Built \(out.path) (\(try FileManager.default.attributesOfItem(atPath: out.path)[.size] ?? 0) bytes)")
+    try runInstallHddGuard(repoRoot: cfg.assetRoot.deletingLastPathComponent().deletingLastPathComponent())
     return out
+}
+
+func runInstallHddGuard(repoRoot: URL) throws {
+    let tools = repoRoot.appendingPathComponent("tools/PS4LinuxTools", isDirectory: true)
+    print("InstallHddScriptGuard (overlay + initramfs + arch/bzImage)…")
+    fflush(stdout)
+    _ = try run(
+        "/usr/bin/swift",
+        ["run", "--package-path", tools.path, "ps4-linux-install-guard", repoRoot.path],
+        timeout: 300
+    )
 }
 
 func waitForFTP(host: String, port: Int, attempts: Int = 60) throws {
@@ -242,7 +282,15 @@ func ftpDelete(path: String, host: String, port: Int) {
 func prepareAssets(cfg: Config) throws -> (initramfs: URL, arch: URL, installGBFile: URL) {
     try FileManager.default.createDirectory(at: cfg.assetRoot, withIntermediateDirectories: true)
 
-    try downloadIfNeeded(url: Config.bzImageURL, to: cfg.assetRoot.appendingPathComponent("bzImage"), expectedSHA256: nil)
+    let bz = cfg.assetRoot.appendingPathComponent("bzImage")
+    try downloadIfNeeded(url: Config.bzImageURL, to: bz, expectedSHA256: nil)
+    let bzBytes = fileSize(bz)
+    guard bzBytes == Config.bzImageExpectedBytes else {
+        throw SyncError.message(
+            "bzImage size \(bzBytes) != expected \(Config.bzImageExpectedBytes) — re-download feeRnt neocine kernel"
+        )
+    }
+    print("OK bzImage \(bzBytes) bytes (feeRnt 5.4.247-neocine)")
     let nazky = cfg.assetRoot.appendingPathComponent("initramfs.nazky.cpio.gz")
     if !FileManager.default.fileExists(atPath: nazky.path) {
         if FileManager.default.fileExists(atPath: cfg.assetRoot.appendingPathComponent("initramfs.cpio.gz").path) {
@@ -279,9 +327,14 @@ func prepareAssets(cfg: Config) throws -> (initramfs: URL, arch: URL, installGBF
 }
 
 func uploadAssets(cfg: Config, initramfs: URL, arch: URL, installGBFile: URL) throws {
+    let repoRoot = cfg.assetRoot.deletingLastPathComponent().deletingLastPathComponent()
+    try runInstallHddGuard(repoRoot: repoRoot)
+
     try waitForFTP(host: cfg.host, port: cfg.port)
 
     ftpDelete(path: "/user/home/Arch.img", host: cfg.host, port: cfg.port)
+    ftpDelete(path: "/user/system/boot/install-status.txt", host: cfg.host, port: cfg.port)
+    ftpDelete(path: "/user/system/boot/ps4-linux-installed.meta", host: cfg.host, port: cfg.port)
 
     try ftpUpload(
         local: cfg.assetRoot.appendingPathComponent("bzImage"),
@@ -304,6 +357,17 @@ func uploadAssets(cfg: Config, initramfs: URL, arch: URL, installGBFile: URL) th
     )
     try ftpUpload(local: arch, remotePath: "/user/system/boot/arch.tar.xz", host: cfg.host, port: cfg.port)
     try ftpUpload(local: installGBFile, remotePath: "/user/system/boot/ps4-install-gb.txt", host: cfg.host, port: cfg.port)
+
+    if cfg.installNetDebug {
+        let enable = cfg.assetRoot.appendingPathComponent("overlays/system/boot/ps4-install-netdebug.enable")
+        try "enabled by ps4-linux-sync --netdebug\n".write(to: enable, atomically: true, encoding: .utf8)
+        try ftpUpload(local: enable, remotePath: "/user/system/boot/ps4-install-netdebug.enable", host: cfg.host, port: cfg.port)
+        let conf = cfg.assetRoot.appendingPathComponent("overlays/system/boot/ps4-install-netdebug.conf")
+        if FileManager.default.fileExists(atPath: conf.path) {
+            try ftpUpload(local: conf, remotePath: "/user/system/boot/ps4-install-netdebug.conf", host: cfg.host, port: cfg.port)
+        }
+        print("Tip: PS4 app writes ps4-net-inherit.conf before kexec (Wi‑Fi/LAN from Orbis)")
+    }
 
     try uploadPayloads(cfg: cfg)
 
@@ -431,6 +495,8 @@ func parseArgs(_ args: [String]) -> (command: String, cfg: Config) {
         case "--install-gb":
             i += 1
             if i < args.count, let n = Int(args[i]) { cfg.installGB = max(50, n) }
+        case "--netdebug":
+            cfg.installNetDebug = true
         default:
             break
         }
@@ -458,10 +524,11 @@ do {
         print(
             """
             Usage:
-              swift tools/ps4-linux-sync.swift sync [--host 10.0.1.7] [--install-gb 100]
-              swift tools/ps4-linux-sync.swift prepare [--install-gb 100]
-              swift tools/ps4-linux-sync.swift upload [--host 10.0.1.7] [--install-gb 100]
+              swift tools/ps4-linux-sync.swift sync [--host 10.0.1.7] [--install-gb 100] [--netdebug]
+              swift tools/ps4-linux-sync.swift prepare [--install-gb 100] [--netdebug]
+              swift tools/ps4-linux-sync.swift upload [--host 10.0.1.7] [--install-gb 100] [--netdebug]
               swift tools/ps4-linux-sync.swift payloads [--host 10.0.1.7]
+            Env: PS4LINUX_INSTALL_NETDEBUG=1 same as --netdebug
             """
         )
         exit(1)

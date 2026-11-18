@@ -9,6 +9,7 @@
 #include <string>
 
 #include "AppFileLog.h"
+#include "Ps4NetworkInherit.h"
 #include "Utility.h"
 
 static bool pathReadable(const char *p) { return p != nullptr && access(p, R_OK) == 0; }
@@ -208,6 +209,24 @@ static bool writeInstallGbOrUseExisting(const std::string &gb) {
   return false;
 }
 
+bool LinuxBootConfig::WriteLaunchIntent(const char *intent) const {
+  if (intent == nullptr || intent[0] == '\0') {
+    return false;
+  }
+  std::string line(intent);
+  if (line.back() != '\n') {
+    line += "\n";
+  }
+  bool ok = Utility::WriteTextFile("/data/linux/boot/ps4-linux-launch-intent.txt", line);
+  ok = Utility::WriteTextFile("/user/system/boot/ps4-linux-launch-intent.txt", line) || ok;
+  if (!ok) {
+    APP_LOG_WARN("WriteLaunchIntent: could not write ps4-linux-launch-intent.txt");
+  } else {
+    APP_LOG_INFO("WriteLaunchIntent=%s", intent);
+  }
+  return ok;
+}
+
 bool LinuxBootConfig::WriteBootFiles() const {
   std::string vram;
   Utility::StrSprintf(vram, "%d\n", vramMb);
@@ -224,6 +243,9 @@ bool LinuxBootConfig::WriteBootFiles() const {
   }
   if (installTarget == InstallTarget::InternalHdd && !writeInstallGbOrUseExisting(gb)) {
     return false;
+  }
+  if (!WritePs4NetworkInheritConf()) {
+    APP_LOG_WARN("WriteBootFiles: ps4-net-inherit.conf not written (install netdebug may use DHCP)");
   }
   if (!Save()) {
     return false;

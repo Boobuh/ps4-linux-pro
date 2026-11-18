@@ -5,11 +5,13 @@
 //   swift tools/ps4-linux-console-cycle.swift cycle [--host 10.0.1.7] [--wait-seconds 120]
 //   swift tools/ps4-linux-console-cycle.swift logs [--host 10.0.1.7]
 //   swift tools/ps4-linux-console-cycle.swift status [--host 10.0.1.7]
+//   swift tools/ps4-linux-console-cycle.swift install-watch [--host 10.0.1.7] [--http-port 8765]
 import Foundation
 
 struct Config {
     var host = ProcessInfo.processInfo.environment["PS4_HOST"] ?? "10.0.1.7"
     var port = 2121
+    var installHttpPort = 8765
     var waitSeconds = 120
     var repoRoot: URL {
         URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
@@ -174,6 +176,55 @@ func pullLog(host: String, port: Int, path: String) -> String? {
     return body
 }
 
+private let kBzImagePath = "/data/linux/boot/bzImage"
+private let kInitramfsPath = "/data/linux/boot/initramfs.cpio.gz"
+private let kKernelIdPath = "/data/linux/boot/ps4-kernel-id.txt"
+private let kBzImageExpected: Int64 = 9_872_896
+private let kBzImageMin: Int64 = 8_000_000
+private let kBzImageMax: Int64 = 16_000_000
+private let kInitramfsMin: Int64 = 3_000_000
+
+func ftpRemoteFileSize(host: String, port: Int, path: String) -> Int64? {
+    guard let (head, st) = try? runCurl(["-I", "ftp://\(host):\(port)\(path)"], timeout: 20), st == 0 else {
+        return nil
+    }
+    for line in head.split(separator: "\n") {
+        let lower = line.lowercased()
+        if lower.hasPrefix("content-length:") {
+            let raw = line.split(separator: ":", maxSplits: 1).dropFirst().joined()
+            return Int64(raw.trimmingCharacters(in: .whitespacesAndNewlines))
+        }
+    }
+    return nil
+}
+
+func printBootStackFtpStatus(host: String, port: Int) {
+    let kernelBytes = ftpRemoteFileSize(host: host, port: port, path: kBzImagePath)
+    let initBytes = ftpRemoteFileSize(host: host, port: port, path: kInitramfsPath)
+    let kernelId = pullLog(host: host, port: port, path: kKernelIdPath)?.trimmingCharacters(in: .whitespacesAndNewlines)
+
+    print("\nBoot stack (FTP):")
+    if let k = kernelBytes {
+        let ok = k >= kBzImageMin && k <= kBzImageMax
+        let exp = k == kBzImageExpected ? " — feeRnt size" : ""
+        print("  \(kBzImagePath): \(k) B [\(ok ? "OK" : "BAD")]\(exp)")
+    } else {
+        print("  \(kBzImagePath): missing")
+    }
+    if let i = initBytes {
+        let ok = i >= kInitramfsMin
+        print("  \(kInitramfsPath): \(i) B [\(ok ? "OK" : "TOO SMALL")]")
+    } else {
+        print("  \(kInitramfsPath): missing")
+    }
+    if let id = kernelId, !id.isEmpty {
+        print("  \(kKernelIdPath): \(id)")
+    }
+    let ready = (kernelBytes.map { $0 >= kBzImageMin && $0 <= kBzImageMax } ?? false)
+        && (initBytes.map { $0 >= kInitramfsMin } ?? false)
+    print(ready ? "  → Ready for kexec / HDD install" : "  → NOT ready (sync or app Download kernel)")
+}
+
 func installedPkgName(host: String, port: Int) -> String? {
     guard let json = pullLog(host: host, port: port, path: "/user/app/CSTP00003/app.json"),
           let range = json.range(of: "PS4-Linux-v") else { return nil }
@@ -196,6 +247,7 @@ func printStatus(host: String, port: Int, repoRoot: URL) {
     print("=== PS4 Linux status ===")
     print("Mac latest PKG:     \(macPkg)")
     print("Console installed:  \(installed)")
+    printBootStackFtpStatus(host: host, port: port)
 
     if installed == "(CSTP00003 not installed)" {
         print("\nNext: Package Installer → /data/pkg/\(macPkg) (delete old tile first if reinstall fails)")
@@ -340,6 +392,35 @@ func cycle(cfg: Config) throws {
     }
 }
 
+func watchInstallLog(host: String, httpPort: Int) throws {
+    let url = "http://\(host):\(httpPort)/install-status.txt"
+    print("=== Install netdebug (initramfs HTTP, not GoldHEN FTP) ===")
+    print(url)
+    print("Ctrl+C to stop.\n")
+    var lastShown = 0
+    var misses = 0
+    while true {
+        let (body, status) = try runCurl(["-f", url], timeout: 8)
+        if status == 0, !body.isEmpty {
+            misses = 0
+            if body.count > lastShown {
+                let slice = body.index(body.startIndex, offsetBy: lastShown) ...
+                    body.endIndex
+                fputs(String(body[slice]), stdout)
+                fflush(stdout)
+                lastShown = body.count
+            }
+        } else {
+            misses += 1
+            if misses == 1 || misses % 6 == 0 {
+                fputs(" (waiting for install HTTP…)\n", stdout)
+                fflush(stdout)
+            }
+        }
+        Thread.sleep(forTimeInterval: 5)
+    }
+}
+
 let args = Array(CommandLine.arguments.dropFirst())
 var cfg = Config()
 var cmd = "cycle"
@@ -352,7 +433,10 @@ while i < args.count {
     case "--wait-seconds":
         i += 1
         if i < args.count, let n = Int(args[i]) { cfg.waitSeconds = max(15, n) }
-    case "cycle", "logs", "upload", "status", "clean-pkg":
+    case "--http-port":
+        i += 1
+        if i < args.count, let n = Int(args[i]) { cfg.installHttpPort = max(1024, n) }
+    case "cycle", "logs", "upload", "status", "clean-pkg", "install-watch":
         cmd = args[i]
     default:
         break
@@ -366,6 +450,8 @@ do {
         printStatus(host: cfg.host, port: cfg.port, repoRoot: cfg.repoRoot)
     case "logs":
         printLogs(host: cfg.host, port: cfg.port)
+    case "install-watch":
+        try watchInstallLog(host: cfg.host, httpPort: cfg.installHttpPort)
     case "clean-pkg":
         var hostClean = cfg.host
         if (try? runCurl(["ftp://\(hostClean):\(cfg.port)/"], timeout: 5)).map({ $0.status == 0 }) != true {

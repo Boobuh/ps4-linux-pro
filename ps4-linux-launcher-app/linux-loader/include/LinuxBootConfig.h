@@ -26,6 +26,8 @@ struct LinuxBootConfig {
   void Normalize();
   void Load();
   bool Save() const;
+  /// `boot` | `install` | `reinstall` — read by initramfs / install-HDD.
+  bool WriteLaunchIntent(const char *intent) const;
   bool WriteBootFiles() const;
   std::string ResolvePayloadPath() const;
   std::string BuildBootargs() const;

@@ -28,6 +28,8 @@ private:
   std::string m_StatusLine;
   std::string m_BootCheckLine;
   std::string m_HardwareLine;
+  enum class LaunchIntent { Boot, Install, Reinstall };
+  LaunchIntent m_LastLaunchIntent = LaunchIntent::Install;
   bool m_Launching;
   bool m_BootInProgress;
   bool m_LaunchBlockUi;
@@ -37,8 +39,8 @@ private:
   uint64_t m_LaunchBlockStart;
   int m_MenuIndex;
 
-  enum class SubScreen { None, PickInstallGb, PickVram, AdjustInstallGb, ConfirmReinstall };
-  enum class MainMenuAction { PrimaryLaunch, NewInstallWipe, InstallGb, Vram, Refresh };
+  enum class SubScreen { None, PickInstallGb, PickVram, PickKernel, AdjustInstallGb, ConfirmReinstall };
+  enum class MainMenuAction { PrimaryLaunch, NewInstallWipe, InstallGb, Vram, DownloadKernel, Refresh };
   SubScreen m_SubScreen;
   int m_PickerSelected;
   int m_ManualArchGb;
@@ -48,6 +50,8 @@ private:
   int RenderSubScreen();
   void OpenInstallGbPicker();
   void OpenVramPicker();
+  void OpenKernelPicker();
+  void RunKernelDownload(int catalogIndex);
   int MainMenuCount() const;
   MainMenuAction ActionForMenuIndex(int index) const;
   void BuildMenuLine(int index, bool selected, std::string &outLine) const;
@@ -55,7 +59,7 @@ private:
   void EndLaunchBlockUiFailed(const char *detail);
   float LaunchProgress01() const;
   int RenderLaunchBlockUi();
-  bool LaunchLinuxPayload(bool wipeForNewInstall);
+  bool LaunchLinuxPayload(LaunchIntent intent);
 };
 
 #endif

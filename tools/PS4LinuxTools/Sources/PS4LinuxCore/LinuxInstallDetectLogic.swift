@@ -136,6 +136,7 @@ public enum LinuxInstallDetectLogic {
         status.contains("Step 3/3 done")
             || status.contains("extract finished")
             || status.contains("switch_root")
+            || status.contains("install_complete=1")
     }
 
     public static func readMetaField(_ raw: String, key: String) -> String? {

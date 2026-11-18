@@ -1,6 +1,27 @@
 import PS4LinuxCore
 import XCTest
 
+final class LinuxBootStackLogicTests: XCTestCase {
+    func testValidateSizesReady() {
+        let c = LinuxBootStackLogic.validateSizes(kernelBytes: 9_872_896, initramfsBytes: 4_086_408)
+        XCTAssertTrue(c.readyForLaunch)
+        XCTAssertTrue(c.kernelSizeOk)
+        XCTAssertTrue(c.initramfsSizeOk)
+    }
+
+    func testValidateSizesMissingKernel() {
+        let c = LinuxBootStackLogic.validateSizes(kernelBytes: nil, initramfsBytes: 4_000_000)
+        XCTAssertFalse(c.readyForLaunch)
+        XCTAssertTrue(c.statusLines().joined().contains("missing"))
+    }
+
+    func testValidateSizesTinyKernel() {
+        let c = LinuxBootStackLogic.validateSizes(kernelBytes: 4096, initramfsBytes: 4_000_000)
+        XCTAssertFalse(c.readyForLaunch)
+        XCTAssertFalse(c.kernelSizeOk)
+    }
+}
+
 final class LinuxBootConfigLogicTests: XCTestCase {
     func testArchGbClampMinMaxDefault() {
         XCTAssertEqual(LinuxBootConfigLogic.clampArchGb(10), 50)
@@ -244,14 +265,17 @@ final class InstallHddOverlayTests: XCTestCase {
     func testInstallHddScriptWritesMetaBlock() throws {
         let repo = RepoPaths.repoRoot(fromFile: #filePath)
         let script = repo.appendingPathComponent("downloads/ps4-linux-baikal/overlays/bin/install-HDD.sh")
-        let text = try String(contentsOf: script, encoding: .utf8)
-        XCTAssertTrue(text.contains("ps4-linux-installed.meta"))
-        XCTAssertTrue(text.contains("install_complete=1"))
-        XCTAssertTrue(text.contains("distro=psxitarch"))
-        XCTAssertTrue(text.contains("ensure_sbin_init"))
-        XCTAssertTrue(text.contains("usr/lib/systemd/systemd"))
-        XCTAssertTrue(text.contains("partsize=100"))
-        XCTAssertTrue(text.contains("ps4-install-gb.txt"))
+        let errors = InstallHddScriptGuard.validateOverlay(at: script)
+        XCTAssertEqual(errors, [], errors.joined(separator: "; "))
+    }
+
+    func testInstallHddScriptRejectsBrokenSwitchRootExample() {
+        let broken = """
+        exec switch_root /newroot /newroot/sbin/init
+        ensure_sbin_init || exit 1
+        """
+        let errors = InstallHddScriptGuard.validateScriptContent(broken)
+        XCTAssertFalse(errors.isEmpty)
     }
 
     func testInitSnippetRunsInstallWhenNoArchImg() throws {

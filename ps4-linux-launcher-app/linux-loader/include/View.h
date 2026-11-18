@@ -8,7 +8,7 @@
 
 #define HEADER_SIZE 200
 #define FOOTER_SIZE 100
-#define BORDER_X 100
+#define BORDER_X 128
 
 #define MENU_BORDER 10
 #define MENU_IN_IMAGE_BORDER 10

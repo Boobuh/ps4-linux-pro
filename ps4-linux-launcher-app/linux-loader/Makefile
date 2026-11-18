@@ -60,11 +60,13 @@ RESTORE_STAGE11_CPP := main.cpp AppFileLog.cpp FailSafeGuest.cpp
 RESTORE_STAGE12_CPP := main.cpp App.cpp Graphics.cpp Controller.cpp Resource.cpp LanguageMinimal.cpp Utility.cpp \
 	AppFileLog.cpp FailSafeGuest.cpp SystemServiceRuntime.cpp
 RESTORE_STAGE2_CPP := main.cpp App.cpp Graphics.cpp Controller.cpp Resource.cpp LanguageMinimal.cpp Utility.cpp \
-	AppFileLog.cpp FailSafeGuest.cpp PlatformDetect.cpp LinuxInstallDetect.cpp LinuxBootConfigLite.cpp LinuxLoaderView.cpp SystemServiceRuntime.cpp
+	AppFileLog.cpp FailSafeGuest.cpp PlatformDetect.cpp LinuxInstallDetect.cpp LinuxBootConfigLite.cpp \
+	KernelCatalog.cpp KernelDownload.cpp LinuxBootStackCheck.cpp Ps4NetworkInherit.cpp \
+	LinuxLoaderView.cpp SystemServiceRuntime.cpp
 RESTORE_STAGE3_CPP := $(RESTORE_STAGE2_CPP) SettingsView.cpp Language.cpp LinuxBootConfig.cpp
 RESTORE_STAGE3_EXTRA_CPP := CreditView.cpp
 
-RESTORE_FULL_LIBS := -lc -lkernel -lc++ -lSceVideoOut -lSceGnmDriver -lSceSysmodule -lSceFreeType -lScePad -lSceKeyboard -lSceUserService -lSceSystemService -lSceLibcInternal -Llibs -lLog
+RESTORE_FULL_LIBS := -lc -lkernel -lc++ -lSceVideoOut -lSceGnmDriver -lSceSysmodule -lSceFreeType -lScePad -lSceKeyboard -lSceUserService -lSceSystemService -lSceLibcInternal -lSceHttp -lSceSsl -lSceNet -Llibs -lLog
 
 # GoldHEN CSTP00003: match OneFamily (~899 KiB 8-entry FSELF). See FselfShipGate.validateGoldHenOneFamilyShipProfile.
 PS4LINUX_EBOOT_MAX_BYTES ?= 950000
