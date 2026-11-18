@@ -26,3 +26,18 @@ credentials.json
 
 # Large downloads (sync tool fetches these)
 downloads/
+
+# Local scratch (console evidence, Cursor backups, internal runbook copy)
+tmp/
+
+# FSELF / eboot bisect artifacts (not ship output)
+**/.ps4-linux-fself-method
+**/eboot.bin.oelf
+**/eboot-*-test.bin
+**/eboot-docker-*.bin
+**/eboot-raw-linux.bin
+**/eboot-paid.bin
+**/eboot-linux-test.bin
+**/eboot-test.bin
+**/eboot-fself-test.bin*
+**/stage12*

@@ -12,7 +12,17 @@ project.log
 build
 sce_sys/param.sfo
 eboot.bin
+eboot.bin.oelf
 guest.elf
 assets/boot/guest.elf
 pkg.gp4
 *.pkg
+.ps4-linux-fself-method
+eboot-*-test.bin
+eboot-docker-*.bin
+eboot-raw-linux.bin
+eboot-paid.bin
+eboot-linux-test.bin
+eboot-test.bin
+eboot-fself-test.bin*
+stage12*
