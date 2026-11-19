@@ -1,6 +1,5 @@
 #include "LinuxBootStackCheck.h"
 
-#include <sys/stat.h>
 #include <unistd.h>
 
 #include <cstdio>
@@ -14,15 +13,15 @@ static constexpr int64_t kKernelMinBytes = 8'000'000;
 static constexpr int64_t kInitramfsMinBytes = 3'000'000;
 
 static bool fileStat(const char *path, int64_t *outBytes) {
-  if (path == nullptr || access(path, R_OK) != 0) {
+  if (path == nullptr) {
     return false;
   }
-  struct stat st {};
-  if (stat(path, &st) != 0 || !S_ISREG(st.st_mode)) {
+  const int64_t bytes = Utility::FileSizeBytes(path);
+  if (bytes < 0) {
     return false;
   }
   if (outBytes != nullptr) {
-    *outBytes = static_cast<int64_t>(st.st_size);
+    *outBytes = bytes;
   }
   return true;
 }

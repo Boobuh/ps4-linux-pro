@@ -22,7 +22,7 @@ What it does:
 
 1. Downloads **full** hippie68 `psxitarch.tar.xz` (~1.76 GB, SHA256 verified) if missing or corrupt.
 2. Builds **auto-install** Nazky initramfs (`install-HDD.sh` runs itself when `Arch.img` is missing; size from `ps4-install-gb.txt`).
-3. FTP: deletes broken **`/user/home/Arch.img`**, uploads `bzImage`, initramfs, **`arch.tar.xz`**, `vram.txt` (**1024**), payloads.
+3. FTP: uploads `bzImage`, initramfs, **`arch.tar.xz`**, `vram.txt` (**1024**), payloads. **Keeps** finished **`/user/home/Arch.img`** (≥256 MiB); only removes tiny partials or use **`sync --wipe-arch`** for a full reinstall. **PS4 reboot does not delete Linux.** Installed **psxitarch** (user `psxita`, SSH, packages, desktop tweaks) lives on **ext2 inside `Arch.img`** — each **Boot installed Linux** only mounts that image; settings persist across PS4 and Arch sessions until you **Setup new install** or **`--wipe-arch`**.
 
 ## On the console
 

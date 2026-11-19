@@ -3,7 +3,7 @@ import Foundation
 /// Blocks broken internal-HDD install scripts (wrong `switch_root`, tar without checks).
 /// See docs/PS4-LINUX-BAIKAL-ASSETS.md and overlay `install-HDD.sh`.
 public enum InstallHddScriptGuard {
-    public static let scriptRevision = 4
+    public static let scriptRevision = 7
 
   public static let forbiddenPatterns = [
         "switch_root /newroot /newroot/sbin/init",
@@ -19,6 +19,9 @@ public enum InstallHddScriptGuard {
         ("ensure_sbin_init || exit 1", "init guard"),
         ("ERROR: tar extract failed", "tar failure path"),
         ("Step 3/3 done: extract finished", "success marker"),
+        ("preserving Arch.img", "reboot-safe skip reinstall"),
+        ("finished psxitarch on Arch.img — preserving files/settings", "no mkfs after install_complete"),
+        ("install_complete meta present", "meta guard against auto-wipe"),
     ]
 
     public static func validateScriptContent(_ text: String) -> [String] {
@@ -44,9 +47,8 @@ public enum InstallHddScriptGuard {
         if ensure.lowerBound >= step3.lowerBound {
             errors.append("Step 3 must be logged only after ensure_sbin_init (order)")
         }
-        if text.contains("ps4-linux-installed.meta"),
-            let meta = text.range(of: "ps4-linux-installed.meta"),
-            meta.lowerBound < step3.lowerBound
+        if let writeMeta = text.range(of: "} >/ps4hdd/system/boot/ps4-linux-installed.meta"),
+            writeMeta.lowerBound < step3.lowerBound
         {
             errors.append("install meta must be written only after Step 3 log")
         }

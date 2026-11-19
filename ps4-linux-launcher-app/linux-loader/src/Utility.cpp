@@ -142,6 +142,22 @@ bool Utility::WriteTextFile(const std::string &p_Path, const std::string &p_Cont
   return written == p_Content.size();
 }
 
+int64_t Utility::FileSizeBytes(const char *p_Path) {
+  if (p_Path == nullptr || p_Path[0] == '\0') {
+    return -1;
+  }
+  const int fd = open(p_Path, O_RDONLY);
+  if (fd < 0) {
+    return -1;
+  }
+  const off_t end = lseek(fd, 0, SEEK_END);
+  close(fd);
+  if (end < 0) {
+    return -1;
+  }
+  return static_cast<int64_t>(end);
+}
+
 int Utility::MemoryProtectedCreate(MemoryProtected **p_Memory, size_t p_Size) {
   MemoryProtected *s_Mem;
   long s_PageSize = sysconf(_SC_PAGESIZE);

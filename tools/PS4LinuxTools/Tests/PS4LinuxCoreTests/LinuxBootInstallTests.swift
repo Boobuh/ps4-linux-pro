@@ -94,13 +94,32 @@ final class LinuxBootConfigLogicTests: XCTestCase {
     }
 }
 
+final class SyncArchPreserveLogicTests: XCTestCase {
+    private let minPartial: Int64 = 256 * 1024 * 1024
+
+    func testPreserveInstalledArchUnlessExplicitWipe() {
+        let gb50: Int64 = 50 * 1024 * 1024 * 1024
+        XCTAssertFalse(SyncArchPreserveLogic.shouldDeleteArchOnSync(archBytes: gb50, wipeRequested: false))
+        XCTAssertEqual(
+            SyncArchPreserveLogic.decide(archBytes: gb50, wipeRequested: false),
+            .preserveInstalled(archBytes: gb50)
+        )
+        XCTAssertTrue(SyncArchPreserveLogic.shouldDeleteArchOnSync(archBytes: gb50, wipeRequested: true))
+    }
+
+    func testRemoveOnlyTinyPartial() {
+        XCTAssertTrue(SyncArchPreserveLogic.shouldDeleteArchOnSync(archBytes: 1024, wipeRequested: false))
+        XCTAssertFalse(SyncArchPreserveLogic.shouldDeleteArchOnSync(archBytes: minPartial, wipeRequested: false))
+    }
+}
+
 final class LinuxInstallDetectLogicTests: XCTestCase {
     private let oneGb: Int64 = 1024 * 1024 * 1024
 
     func testMissingArchImg() {
         let s = LinuxInstallDetectLogic.detect(inputs: LinuxInstallInputs())
         XCTAssertEqual(s.level, LinuxInstallLevel.none)
-        XCTAssertTrue(s.summaryLine.contains("missing"))
+        XCTAssertTrue(s.summaryLine.contains("Linux partition") || s.summaryLine.contains("missing"))
     }
 
     func testTinyArchImgPartial() {
@@ -134,10 +153,29 @@ final class LinuxInstallDetectLogicTests: XCTestCase {
 
     func testReadyViaArchImgSizeHeuristic50Gb() {
         let bytes = 50 * oneGb
-        let s = LinuxInstallDetectLogic.detect(inputs: LinuxInstallInputs(archImgBytes: bytes))
+        let s = LinuxInstallDetectLogic.detect(
+            inputs: LinuxInstallInputs(archImgBytes: bytes, archHasExt2: true)
+        )
         XCTAssertEqual(s.level, LinuxInstallLevel.ready)
         XCTAssertEqual(s.archImgSizeGb, 50)
         XCTAssertTrue(s.summaryLine.contains("psxitarch"))
+        XCTAssertTrue(s.summaryLine.contains("ext2"))
+    }
+
+    func testLargeSparseWithoutExt2StaysPartial() {
+        let bytes = 50 * oneGb
+        let s = LinuxInstallDetectLogic.detect(inputs: LinuxInstallInputs(archImgBytes: bytes, archHasExt2: false))
+        XCTAssertEqual(s.level, LinuxInstallLevel.partial)
+        XCTAssertTrue(s.summaryLine.contains("allocated"))
+    }
+
+    func testReadyFromDataBootMetaWhenArchImgNotVisibleToApp() {
+        let meta = "distro=psxitarch\narch_gb=100\ninstall_complete=1\n"
+        let s = LinuxInstallDetectLogic.detect(
+            inputs: LinuxInstallInputs(archImgBytes: nil, installMeta: meta, installStatus: nil)
+        )
+        XCTAssertEqual(s.level, .ready)
+        XCTAssertTrue(s.summaryLine.contains("boot OK"))
     }
 
     func testLargeArchWithoutMetaStillPartialIfUnder50GbNominal() {

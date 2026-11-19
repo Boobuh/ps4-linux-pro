@@ -37,11 +37,19 @@ public struct LinuxInstallInputs: Equatable {
     public var archImgBytes: Int64?
     public var installMeta: String?
     public var installStatus: String?
+    /// Linux ext2 superblock present in the partition image (not native PS4 UFS).
+    public var archHasExt2: Bool
 
-    public init(archImgBytes: Int64? = nil, installMeta: String? = nil, installStatus: String? = nil) {
+    public init(
+        archImgBytes: Int64? = nil,
+        installMeta: String? = nil,
+        installStatus: String? = nil,
+        archHasExt2: Bool = false
+    ) {
         self.archImgBytes = archImgBytes
         self.installMeta = installMeta
         self.installStatus = installStatus
+        self.archHasExt2 = archHasExt2
     }
 }
 
@@ -63,7 +71,39 @@ public enum LinuxInstallDetectLogic {
 
     public static func detect(inputs: LinuxInstallInputs) -> LinuxInstallState {
         guard let archBytes = inputs.archImgBytes, archBytes >= 0 else {
-            return LinuxInstallState(summaryLine: "No Linux on internal HDD (Arch.img missing)")
+            var fromMarkers = LinuxInstallState()
+            let meta = inputs.installMeta
+            let status = inputs.installStatus
+            var complete = false
+            if let meta {
+                if readMetaField(meta, key: "install_complete") == "1" {
+                    complete = true
+                }
+                if let d = readMetaField(meta, key: "distro") {
+                    fromMarkers.distro = d
+                }
+                if let gbStr = readMetaField(meta, key: "arch_gb"), let gb = Int(gbStr) {
+                    fromMarkers.metaArchGb = gb
+                }
+            }
+            if let status, installStatusIndicatesComplete(status) {
+                complete = true
+            }
+            if complete {
+                fromMarkers.level = .ready
+                let showGb = fromMarkers.metaArchGb > 0 ? fromMarkers.metaArchGb : 100
+                let distro = fromMarkers.distro.isEmpty ? "psxitarch" : fromMarkers.distro
+                fromMarkers.summaryLine =
+                    "Linux partition ready: \(distro) on internal HDD (\(showGb) GB) — boot OK (image not visible to Orbis app)"
+                return fromMarkers
+            }
+            if meta != nil || status != nil {
+                return LinuxInstallState(
+                    level: .partial,
+                    summaryLine: "Install meta on PS4 HDD but Linux partition file missing — run Setup new"
+                )
+            }
+            return LinuxInstallState(summaryLine: "No Linux partition on PS4 HDD (Arch.img not on /user/home)")
         }
 
         var out = LinuxInstallState()
@@ -71,7 +111,7 @@ public enum LinuxInstallDetectLogic {
 
         if archBytes < minArchBytesForPartial {
             out.level = .partial
-            out.summaryLine = "Partial Linux install (Arch.img too small — use Setup new)"
+            out.summaryLine = "Partial Linux partition (image too small — use Setup new)"
             return out
         }
 
@@ -91,19 +131,27 @@ public enum LinuxInstallDetectLogic {
             out.level = .ready
         }
 
-        if out.level != .ready, out.archImgSizeGb >= 50 {
+        if out.level != .ready, out.archImgSizeGb >= 50, inputs.archHasExt2 {
             out.level = .ready
         }
 
         if out.level != .ready {
             out.level = .partial
-            out.summaryLine = "Partial Linux install — use Setup new to wipe and retry"
+            if inputs.archHasExt2 {
+                out.summaryLine = "Linux ext2 partition found — finish install or use Boot (not native PS4 storage)"
+            } else if out.archImgSizeGb >= 10 {
+                out.summaryLine =
+                    "Linux partition file allocated — formatting/install not finished (Setup new to retry)"
+            } else {
+                out.summaryLine = "Partial Linux partition — use Setup new to wipe and retry"
+            }
             return out
         }
 
         let showGb = out.metaArchGb > 0 ? out.metaArchGb : out.archImgSizeGb
         let distro = out.distro.isEmpty ? "psxitarch" : out.distro
-        out.summaryLine = "Installed: \(distro) on internal HDD (\(showGb) GB partition)"
+        out.summaryLine =
+            "Linux partition ready: \(distro) ext2 in Arch.img (\(showGb) GB) — separate from native PS4 — boot OK"
         return out
     }
 

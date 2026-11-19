@@ -1,5 +1,5 @@
 // Sync PS4 internal Linux boot files over GoldHEN FTP — downloads, patches initramfs for auto install, uploads.
-// Usage: swift tools/ps4-linux-sync.swift sync [--host 10.0.1.7] [--install-gb 100]
+// Usage: swift tools/ps4-linux-sync.swift sync [--host 10.0.1.7] [--install-gb 100] [--wipe-arch]
 import CryptoKit
 import Foundation
 
@@ -9,6 +9,8 @@ struct Config {
     var installGB = 100
     /// Bake initramfs stamp + upload HDD enable file for HTTP install log during kexec (port 8765).
     var installNetDebug: Bool = ProcessInfo.processInfo.environment["PS4LINUX_INSTALL_NETDEBUG"] == "1"
+    /// Delete `/user/home/Arch.img` before upload (default: only drop partial/broken images).
+    var wipeArchOnSync: Bool = ProcessInfo.processInfo.environment["PS4LINUX_WIPE_ARCH"] == "1"
     let assetRoot: URL
 
     init() {
@@ -140,7 +142,7 @@ func buildAutoInitramfs(cfg: Config) throws -> URL {
     let etcDir = work.appendingPathComponent("etc", isDirectory: true)
     try FileManager.default.createDirectory(at: etcDir, withIntermediateDirectories: true)
     let revStamp = etcDir.appendingPathComponent("ps4-linux-install-hdd.rev")
-    try "4\n".write(to: revStamp, atomically: true, encoding: .utf8)
+    try "7\n".write(to: revStamp, atomically: true, encoding: .utf8)
 
     let uiOverlay = cfg.assetRoot.appendingPathComponent("overlays/bin/ps4-linux-ui.sh")
     let uiDest = work.appendingPathComponent("bin/ps4-linux-ui.sh")
@@ -279,6 +281,113 @@ func ftpDelete(path: String, host: String, port: Int) {
     }
 }
 
+/// Remote regular-file size in bytes, or `nil` if missing / not readable.
+func ftpRemoteSize(path: String, host: String, port: Int) -> Int64? {
+    let url = "ftp://\(host):\(port)\(path)"
+    do {
+        let out = try run(
+            "/usr/bin/curl",
+            ["--connect-timeout", "10", "-m", "30", "-sI", url],
+            timeout: 60
+        )
+        for line in out.split(separator: "\n") {
+            let lower = line.lowercased()
+            if lower.hasPrefix("content-length:") {
+                let digits = line.split(separator: ":").dropFirst().joined(separator: ":").trimmingCharacters(in: .whitespaces)
+                if let n = Int64(digits) {
+                    return n
+                }
+            }
+        }
+    } catch {
+        return nil
+    }
+    return nil
+}
+
+private let kMinPartialArchBytes: Int64 = 256 * 1024 * 1024
+
+/// After a finished install, default intent to `boot` so initramfs never treats the next kexec as a fresh mkfs.
+func ensureLaunchIntentBoot(host: String, port: Int) {
+    let tmp = FileManager.default.temporaryDirectory.appendingPathComponent("ps4-linux-launch-intent.txt")
+    defer { try? FileManager.default.removeItem(at: tmp) }
+    do {
+        try "boot\n".write(to: tmp, atomically: true, encoding: .utf8)
+        for path in ["/user/system/boot/ps4-linux-launch-intent.txt", "/data/linux/boot/ps4-linux-launch-intent.txt"] {
+            try ftpUpload(local: tmp, remotePath: path, host: host, port: port)
+        }
+        print("Set ps4-linux-launch-intent.txt → boot (reboot keeps same psxitarch root)")
+    } catch {
+        print("Note: could not write launch intent boot (\(error))")
+    }
+}
+
+func deleteInstallMarkers(host: String, port: Int) {
+    ftpDelete(path: "/user/system/boot/install-status.txt", host: host, port: port)
+    ftpDelete(path: "/user/system/boot/ps4-linux-installed.meta", host: host, port: port)
+    ftpDelete(path: "/data/linux/boot/ps4-linux-installed.meta", host: host, port: port)
+    ftpDelete(path: "/data/linux/boot/install-status.txt", host: host, port: port)
+}
+
+/// Clears Arch.img only with `--wipe-arch` or when the image is a tiny broken partial (<256 MiB).
+/// PS4 power cycle / reboot does not touch Arch.img; Mac sync must not delete a finished install.
+func maybeWipeArchInstallState(cfg: Config) {
+    let archPath = "/user/home/Arch.img"
+    let remoteBytes = ftpRemoteSize(path: archPath, host: cfg.host, port: cfg.port)
+    let wipeRequested = cfg.wipeArchOnSync
+
+    if wipeRequested {
+        ftpDelete(path: archPath, host: cfg.host, port: cfg.port)
+        deleteInstallMarkers(host: cfg.host, port: cfg.port)
+        print("Wiped Arch.img + install markers (--wipe-arch / PS4LINUX_WIPE_ARCH=1)")
+        return
+    }
+    guard let bytes = remoteBytes else {
+        print("No \(archPath) on console — install detect will show “Install Linux on HDD” until first install finishes")
+        return
+    }
+    if bytes < kMinPartialArchBytes {
+        ftpDelete(path: archPath, host: cfg.host, port: cfg.port)
+        deleteInstallMarkers(host: cfg.host, port: cfg.port)
+        print("Removed partial Arch.img (\(bytes) B) — use PS4 app or next kexec to reinstall")
+        return
+    }
+    print(
+        """
+        PRESERVE Linux install: keeping Arch.img (\(bytes) B) + install markers (reboot-safe; Mac sync will not delete).
+        To intentionally wipe: swift tools/ps4-linux-sync.swift sync --wipe-arch
+        """
+    )
+    ensureLaunchIntentBoot(host: cfg.host, port: cfg.port)
+    mirrorInstallMarkersToDataBoot(host: cfg.host, port: cfg.port)
+}
+
+/// Homebrew cannot read `/user/system/boot` — copy install markers where the app can see them.
+func mirrorInstallMarkersToDataBoot(host: String, port: Int) {
+    let pairs: [(remote: String, localName: String)] = [
+        ("/user/system/boot/ps4-linux-installed.meta", "ps4-linux-installed.meta"),
+        ("/user/system/boot/install-status.txt", "install-status.txt"),
+    ]
+    let tmp = FileManager.default.temporaryDirectory
+    for pair in pairs {
+        let local = tmp.appendingPathComponent("mirror-\(pair.localName)")
+        defer { try? FileManager.default.removeItem(at: local) }
+        do {
+            let url = "ftp://\(host):\(port)\(pair.remote)"
+            _ = try run("/usr/bin/curl", ["--connect-timeout", "10", "-m", "120", "-s", "-o", local.path, url], timeout: 180)
+            guard FileManager.default.fileExists(atPath: local.path),
+                  let sz = try? FileManager.default.attributesOfItem(atPath: local.path)[.size] as? Int64, sz ?? 0 > 0
+            else {
+                continue
+            }
+            try ftpUpload(local: local, remotePath: "/data/linux/boot/\(pair.localName)", host: host, port: port)
+            print("Mirrored \(pair.remote) → /data/linux/boot/\(pair.localName)")
+        } catch {
+            print("Note: could not mirror \(pair.remote) (\(error))")
+        }
+    }
+}
+
 func prepareAssets(cfg: Config) throws -> (initramfs: URL, arch: URL, installGBFile: URL) {
     try FileManager.default.createDirectory(at: cfg.assetRoot, withIntermediateDirectories: true)
 
@@ -317,7 +426,7 @@ func prepareAssets(cfg: Config) throws -> (initramfs: URL, arch: URL, installGBF
     let vram = cfg.assetRoot.appendingPathComponent("vram.txt")
     try "\(1024)\n".write(to: vram, atomically: true, encoding: .utf8)
     let bootargs = cfg.assetRoot.appendingPathComponent("bootargs.txt")
-    try "panic=0 console=tty0 consoleblank=0 net.ifnames=0 rdinit=/init enforcing=0 video=HDMI-A-1:1920x1080@60 fbcon=nodefer loglevel=7 ignore_loglevel earlyprintk\n"
+    try "panic=0 console=tty0 consoleblank=0 net.ifnames=0 rdinit=/init enforcing=0 video=HDMI-A-1:1920x1080@60 drm.edid_firmware=edid/1920x1080.bin fbcon=nodefer loglevel=7 ignore_loglevel earlyprintk\n"
         .write(to: bootargs, atomically: true, encoding: .utf8)
     let installGBFile = cfg.assetRoot.appendingPathComponent("ps4-install-gb.txt")
     try "\(cfg.installGB)\n".write(to: installGBFile, atomically: true, encoding: .utf8)
@@ -332,9 +441,7 @@ func uploadAssets(cfg: Config, initramfs: URL, arch: URL, installGBFile: URL) th
 
     try waitForFTP(host: cfg.host, port: cfg.port)
 
-    ftpDelete(path: "/user/home/Arch.img", host: cfg.host, port: cfg.port)
-    ftpDelete(path: "/user/system/boot/install-status.txt", host: cfg.host, port: cfg.port)
-    ftpDelete(path: "/user/system/boot/ps4-linux-installed.meta", host: cfg.host, port: cfg.port)
+    maybeWipeArchInstallState(cfg: cfg)
 
     try ftpUpload(
         local: cfg.assetRoot.appendingPathComponent("bzImage"),
@@ -474,6 +581,7 @@ func sync(cfg: Config) throws {
           2. Library → Payload Guest → **PS4 Linux** (uses linux-1024mb.bin + /data/linux/boot/).
         Or: GoldHEN → PayLoader → linux-1024mb.elf
         First boot auto-runs install-HDD.sh (\(cfg.installGB) GB) if Arch.img missing — 30–90+ min.
+        PS4 reboot does NOT delete Arch.img; Mac sync keeps installs unless you pass --wipe-arch.
         Install Payload Guest once: docs/PS4-LINUX-XMB-LAUNCH.md
         """
     )
@@ -497,6 +605,8 @@ func parseArgs(_ args: [String]) -> (command: String, cfg: Config) {
             if i < args.count, let n = Int(args[i]) { cfg.installGB = max(50, n) }
         case "--netdebug":
             cfg.installNetDebug = true
+        case "--wipe-arch":
+            cfg.wipeArchOnSync = true
         default:
             break
         }
@@ -524,11 +634,12 @@ do {
         print(
             """
             Usage:
-              swift tools/ps4-linux-sync.swift sync [--host 10.0.1.7] [--install-gb 100] [--netdebug]
+              swift tools/ps4-linux-sync.swift sync [--host 10.0.1.7] [--install-gb 100] [--netdebug] [--wipe-arch]
               swift tools/ps4-linux-sync.swift prepare [--install-gb 100] [--netdebug]
-              swift tools/ps4-linux-sync.swift upload [--host 10.0.1.7] [--install-gb 100] [--netdebug]
+              swift tools/ps4-linux-sync.swift upload [--host 10.0.1.7] [--install-gb 100] [--netdebug] [--wipe-arch]
               swift tools/ps4-linux-sync.swift payloads [--host 10.0.1.7]
-            Env: PS4LINUX_INSTALL_NETDEBUG=1 same as --netdebug
+            Env: PS4LINUX_INSTALL_NETDEBUG=1 same as --netdebug; PS4LINUX_WIPE_ARCH=1 same as --wipe-arch
+            Default sync keeps Arch.img ≥256 MiB (installed Linux). Use --wipe-arch only for a full reinstall.
             """
         )
         exit(1)

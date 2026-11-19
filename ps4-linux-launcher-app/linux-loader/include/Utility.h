@@ -49,6 +49,8 @@ public:
 
   static bool ReadTextFile(const std::string &p_Path, std::string &p_Out);
   static bool WriteTextFile(const std::string &p_Path, const std::string &p_Content);
+  /// Orbis-safe size via `lseek` (-1 if missing or unreadable).
+  static int64_t FileSizeBytes(const char *p_Path);
 
   template <typename I>
   static I AlignUp(I p_Value, I p_Align) {

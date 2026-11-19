@@ -19,6 +19,8 @@ swift tools/ps4-linux-console-cycle.swift install-watch --host 10.0.1.7
 
 **Network:** Before kexec the app writes **`/user/system/boot/ps4-net-inherit.conf`** (and `/data/linux/boot/`) with Orbis **Wi‑Fi or LAN IP, mask, gw, iface**. Install initramfs applies that for netdebug HTTP — no manual `10.0.1.7` file. Enable: `etc/ps4-linux-install-netdebug` in initramfs + `ps4-install-netdebug.enable` on HDD (`sync --netdebug`).
 
+**Install log timestamps:** kexec has no RTC (lines show **1970** without a fix). The app writes **`ps4-linux-orbis-utc.txt`** before launch; install initramfs sets the clock from that (else **`T+123s`** uptime prefixes).
+
 **Fail-safe:** `sync` / `prepare` / `upload` run **`ps4-linux-install-guard`** — refuses to ship an initramfs whose `install-HDD.sh` uses the broken `switch_root /newroot /newroot/sbin/init` pattern, skips tar-without-checks, or lacks revision stamp **`etc/ps4-linux-install-hdd.rev` (rev 3)**. On-console pivot uses **`fail_safe_switch_root`** → **`/sbin/init`** only.
 
 If only loader files were wrong (ELF disguised as `.bin`):
@@ -44,7 +46,7 @@ See **`downloads/ps4-linux-baikal/README.md`** for file layout.
 ## PS4 Linux app (Library)
 
 1. Install latest **`PS4-Linux-v*.pkg`** from `/data/pkg/`.
-2. **Install detect** — reads **`/user/home/Arch.img`**, **`install-status.txt`**, and **`ps4-linux-installed.meta`** (under `/user/system/boot/` or `/data/linux/boot/`). When ready, primary action is **Boot installed Linux** and writes **`ps4-linux-launch-intent.txt`** = `boot` before kexec (initramfs mounts existing Arch.img; no reinstall).
+2. **Install detect** — reads **`/user/home/Arch.img`**, **`install-status.txt`**, and **`ps4-linux-installed.meta`** (under `/user/system/boot/` or `/data/linux/boot/`). When ready, primary action is **Boot installed Linux** and writes **`ps4-linux-launch-intent.txt`** = `boot` before kexec (initramfs mounts existing Arch.img; no reinstall). **Rebooting the PS4 to XMB does not remove Linux**; only **Setup new install** in the app or Mac **`sync --wipe-arch`** deletes **`Arch.img`**.
 3. **Install partition size** — presets **50–200 GB** or **Custom** (Left/Right ±10 GB). Default **100 GB**, minimum **50 GB**. Saved to `ps4-install-gb.txt` before kexec.
 4. **Linux RAM (VRAM)** — **512 / 1024 / 2048 / 4096 MB** (Baikal Pro usually **1024**).
 5. **Setup new install** — confirms wipe of **Arch.img** then kexec (full reinstall).

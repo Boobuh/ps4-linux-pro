@@ -71,18 +71,48 @@ static Color dimColor(Color c) {
   return c;
 }
 
+static int textStartXInBox(int boxX, int boxW, int textW) {
+  const int pad = PS4LINUX_MENU_PAD_X;
+  if (textW <= boxW - pad * 2) {
+    return boxX + (boxW - textW) / 2;
+  }
+  return boxX + pad;
+}
+
+static int textBaselineYInBox(int boxY, int boxH, int fontPx) {
+  return boxY + (boxH + fontPx) / 2 - 6;
+}
+
+static void drawTextCenteredInWidth(Graphics *g, Resource *res, int x, int w, int y, int fontPx,
+                                    const std::string &text, Color fg) {
+  g->SetFontSize(res->m_Typefaces, fontPx);
+  FontSize ts {};
+  g->GetTextSize(text, res->m_Typefaces, &ts);
+  const int tx = textStartXInBox(x, w, ts.width);
+  g->DrawText(text, res->m_Typefaces, tx, y, fg, fg);
+}
+
+static void drawTextCenteredInBox(Graphics *g, Resource *res, int x, int y, int w, int h, int fontPx,
+                                  const std::string &text, Color fg, Color bg) {
+  g->SetFontSize(res->m_Typefaces, fontPx);
+  FontSize ts {};
+  g->GetTextSize(text, res->m_Typefaces, &ts);
+  const int tx = textStartXInBox(x, w, ts.width);
+  const int ty = textBaselineYInBox(y, h, fontPx);
+  g->DrawText(text, res->m_Typefaces, tx, ty, bg, fg);
+}
+
 static void drawMenuRow(Graphics *g, Resource *res, int x, int y, int w, const std::string &label, bool selected,
                         Color fgHi, Color fgDim) {
-  g->DrawRectangle(x, y, w, PS4LINUX_MENU_ROW_H, selected ? PS4LINUX_MENU_ROW_HI : PS4LINUX_MENU_ROW_LO);
-  g->SetFontSize(res->m_Typefaces, DEFAULT_FONT_SIZE);
+  const Color bg = selected ? PS4LINUX_MENU_ROW_HI : PS4LINUX_MENU_ROW_LO;
+  g->DrawRectangle(x, y, w, PS4LINUX_MENU_ROW_H, bg);
   const Color fg = selected ? fgHi : fgDim;
-  g->DrawText(label, res->m_Typefaces, x + PS4LINUX_MENU_PAD_X, y + PS4LINUX_MENU_PAD_Y, fg, fg);
+  drawTextCenteredInBox(g, res, x, y, w, PS4LINUX_MENU_ROW_H, DEFAULT_FONT_SIZE, label, fg, bg);
 }
 
 static void drawHintRow(Graphics *g, Resource *res, int x, int y, int w, const std::string &text, Color fg) {
   g->DrawRectangle(x, y, w, PS4LINUX_HINT_ROW_H, PS4LINUX_HINT_ROW_BG);
-  g->SetFontSize(res->m_Typefaces, DEFAULT_FONT_SIZE - 2);
-  g->DrawText(text, res->m_Typefaces, x + PS4LINUX_MENU_PAD_X, y + PS4LINUX_HINT_PAD_Y, fg, fg);
+  drawTextCenteredInBox(g, res, x, y, w, PS4LINUX_HINT_ROW_H, DEFAULT_FONT_SIZE - 2, text, fg, PS4LINUX_HINT_ROW_BG);
 }
 
 /// GoldHEN socket needs a real kexec `.bin` (not ELF/FSELF). `linux-1024mb.bin` from sync is often ELF bytes.
@@ -152,6 +182,10 @@ void LinuxLoaderView::RefreshPaths() {
     }
   } else {
     m_BootCheckLine = stack.StatusLine();
+    if (!m_Install.IsReady() && !m_Install.summaryLine.empty()) {
+      m_BootCheckLine += " | ";
+      m_BootCheckLine += m_Install.summaryLine;
+    }
   }
   APP_LOG_INFO("Boot stack: kernel=%lld ok=%d initramfs=%lld ok=%d",
                static_cast<long long>(stack.kernelBytes), stack.kernelSizeOk ? 1 : 0,
@@ -395,7 +429,8 @@ int LinuxLoaderView::RenderSubScreen() {
   const int menuW = m_App->Graph->GetScreenWidth() - (BORDER_X * 2);
 
   if (m_SubScreen == SubScreen::ConfirmReinstall) {
-    m_App->Graph->DrawText("Wipe and reinstall?", m_App->Res->m_Typefaces, BORDER_X, 80, titleC, titleC);
+    drawTextCenteredInWidth(m_App->Graph, m_App->Res, BORDER_X, menuW, 80, HEADER_FONT_SIZE, "Wipe and reinstall?",
+                            titleC);
     m_App->Graph->SetFontSize(m_App->Res->m_Typefaces, DEFAULT_FONT_SIZE);
     drawMenuRow(m_App->Graph, m_App->Res, BORDER_X, 160, menuW, "Deletes /user/home/Arch.img and install logs.", false,
                 hi, dim);
@@ -408,7 +443,8 @@ int LinuxLoaderView::RenderSubScreen() {
   }
 
   if (m_SubScreen == SubScreen::AdjustInstallGb) {
-    m_App->Graph->DrawText("Custom install size", m_App->Res->m_Typefaces, BORDER_X, 80, titleC, titleC);
+    drawTextCenteredInWidth(m_App->Graph, m_App->Res, BORDER_X, menuW, 80, HEADER_FONT_SIZE, "Custom install size",
+                            titleC);
     char line[96];
     std::snprintf(line, sizeof(line), "Partition: %d GB  (min %d, default %d)", m_ManualArchGb,
                   LinuxBootConfig::kArchGbMin, LinuxBootConfig::kArchGbDefault);
@@ -425,13 +461,13 @@ int LinuxLoaderView::RenderSubScreen() {
   } else if (m_SubScreen == SubScreen::PickKernel) {
     title = "Download kernel";
   }
-  m_App->Graph->DrawText(title, m_App->Res->m_Typefaces, BORDER_X, 80, titleC, titleC);
+  drawTextCenteredInWidth(m_App->Graph, m_App->Res, BORDER_X, menuW, 80, HEADER_FONT_SIZE, title, titleC);
   m_App->Graph->SetFontSize(m_App->Res->m_Typefaces, DEFAULT_FONT_SIZE - 2);
   const char *subtitle =
       (m_SubScreen == SubScreen::PickKernel)
           ? "PS4 online required. Saves to /data/linux/boot/bzImage (initramfs still from Mac sync)."
           : "Used before Start Linux — saved to ps4-install-gb.txt / vram.txt";
-  m_App->Graph->DrawText(subtitle, m_App->Res->m_Typefaces, BORDER_X, 118, dim, dim);
+  drawTextCenteredInWidth(m_App->Graph, m_App->Res, BORDER_X, menuW, 118, DEFAULT_FONT_SIZE - 2, subtitle, dim);
 
   const int rowY0 = 170;
   const int rowStep = PS4LINUX_MENU_ROW_H + PS4LINUX_MENU_ROW_GAP;
@@ -515,14 +551,14 @@ int LinuxLoaderView::RenderLaunchBlockUi() {
   Color barFill = m_LaunchFailed ? err : Color{0x44, 0xFF, 0xAA, 0xFF};
 
   m_App->Graph->FrameBufferFill(bg);
-  m_App->Graph->SetFontSize(m_App->Res->m_Typefaces, HEADER_FONT_SIZE);
-  m_App->Graph->DrawText(m_LaunchFailed ? "Linux launch failed" : "Installing / booting Linux",
-                         m_App->Res->m_Typefaces, BORDER_X, 80, titleC, titleC);
-  m_App->Graph->SetFontSize(m_App->Res->m_Typefaces, DEFAULT_FONT_SIZE);
-  m_App->Graph->DrawText(m_LaunchPhaseLine, m_App->Res->m_Typefaces, BORDER_X, 150,
-                         m_LaunchFailed ? warn : sub, m_LaunchFailed ? warn : sub);
-
   const int menuW = m_App->Graph->GetScreenWidth() - (BORDER_X * 2);
+  {
+    const std::string launchTitle = m_LaunchFailed ? "Linux launch failed" : "Installing / booting Linux";
+    drawTextCenteredInWidth(m_App->Graph, m_App->Res, BORDER_X, menuW, 80, HEADER_FONT_SIZE, launchTitle, titleC);
+    const Color phaseC = m_LaunchFailed ? warn : sub;
+    drawTextCenteredInWidth(m_App->Graph, m_App->Res, BORDER_X, menuW, 150, DEFAULT_FONT_SIZE, m_LaunchPhaseLine,
+                            phaseC);
+  }
   const int barX = BORDER_X + PS4LINUX_MENU_PAD_X / 2;
   const int barY = 220;
   const int barW = menuW - PS4LINUX_MENU_PAD_X;
@@ -537,8 +573,7 @@ int LinuxLoaderView::RenderLaunchBlockUi() {
 
   char pct[32];
   std::snprintf(pct, sizeof(pct), "%d%%", static_cast<int>(progress * 100.0f + 0.5f));
-  m_App->Graph->SetFontSize(m_App->Res->m_Typefaces, DEFAULT_FONT_SIZE - 2);
-  m_App->Graph->DrawText(pct, m_App->Res->m_Typefaces, barX + barW - 72, barY + PS4LINUX_HINT_PAD_Y, sub, sub);
+  drawTextCenteredInBox(m_App->Graph, m_App->Res, barX, barY, barW, barH, DEFAULT_FONT_SIZE - 2, pct, sub, barBg);
 
   const int hintStep = PS4LINUX_HINT_ROW_H + PS4LINUX_MENU_ROW_GAP;
   int hintY = 280;
@@ -811,25 +846,30 @@ int LinuxLoaderView::Render() {
   const int menuX = PS4LINUX_SAFE_X;
   const int menuW = (w - menuX * 2 > PS4LINUX_CONTENT_MAX_W) ? PS4LINUX_CONTENT_MAX_W : (w - menuX * 2);
 
-  m_App->Graph->SetFontSize(m_App->Res->m_Typefaces, HEADER_FONT_SIZE);
-  m_App->Graph->DrawText("PS4 Linux", m_App->Res->m_Typefaces, menuX, 72, titleC, titleC);
-  m_App->Graph->SetFontSize(m_App->Res->m_Typefaces, DEFAULT_FONT_SIZE - 2);
-  m_App->Graph->DrawText("Baikal: install and run Linux from internal HDD (no USB during boot)", m_App->Res->m_Typefaces,
-                         menuX, 108, sub, sub);
-
-  m_App->Graph->SetFontSize(m_App->Res->m_Typefaces, DEFAULT_FONT_SIZE - 2);
-  m_App->Graph->DrawText(m_HardwareLine, m_App->Res->m_Typefaces, menuX, 148, sub, sub);
+  drawTextCenteredInWidth(m_App->Graph, m_App->Res, menuX, menuW, 72, HEADER_FONT_SIZE, "PS4 Linux", titleC);
+  drawTextCenteredInWidth(m_App->Graph, m_App->Res, menuX, menuW, 108, DEFAULT_FONT_SIZE - 2,
+                          "Baikal: install and run Linux from internal HDD (no USB during boot)", sub);
+  drawTextCenteredInWidth(m_App->Graph, m_App->Res, menuX, menuW, 148, DEFAULT_FONT_SIZE - 2, m_HardwareLine, sub);
   const bool stackOk = InspectBootStack().ReadyForLaunch();
   if (m_Install.IsReady()) {
     Color ready = {0x66, 0xFF, 0xAA, 0xFF};
-    m_App->Graph->DrawText(m_Install.summaryLine, m_App->Res->m_Typefaces, menuX, 182, ready, ready);
-    m_App->Graph->DrawText(m_StatusLine, m_App->Res->m_Typefaces, menuX, 216, sub, sub);
-    m_App->Graph->DrawText(m_BootCheckLine, m_App->Res->m_Typefaces, menuX, 250, stackOk ? sub : warn,
-                           stackOk ? sub : warn);
+    drawTextCenteredInWidth(m_App->Graph, m_App->Res, menuX, menuW, 182, DEFAULT_FONT_SIZE - 2, m_Install.summaryLine,
+                            ready);
+    drawTextCenteredInWidth(m_App->Graph, m_App->Res, menuX, menuW, 216, DEFAULT_FONT_SIZE - 2, m_StatusLine, sub);
+    drawTextCenteredInWidth(m_App->Graph, m_App->Res, menuX, menuW, 250, DEFAULT_FONT_SIZE - 2, m_BootCheckLine,
+                            stackOk ? sub : warn);
   } else {
-    m_App->Graph->DrawText(m_StatusLine, m_App->Res->m_Typefaces, menuX, 182, sub, sub);
-    m_App->Graph->DrawText(m_BootCheckLine, m_App->Res->m_Typefaces, menuX, 216, stackOk ? sub : warn,
-                           stackOk ? sub : warn);
+    if (!m_Install.summaryLine.empty()) {
+      drawTextCenteredInWidth(m_App->Graph, m_App->Res, menuX, menuW, 182, DEFAULT_FONT_SIZE - 2, m_Install.summaryLine,
+                              warn);
+      drawTextCenteredInWidth(m_App->Graph, m_App->Res, menuX, menuW, 216, DEFAULT_FONT_SIZE - 2, m_StatusLine, sub);
+      drawTextCenteredInWidth(m_App->Graph, m_App->Res, menuX, menuW, 250, DEFAULT_FONT_SIZE - 2, m_BootCheckLine,
+                              stackOk ? sub : warn);
+    } else {
+      drawTextCenteredInWidth(m_App->Graph, m_App->Res, menuX, menuW, 182, DEFAULT_FONT_SIZE - 2, m_StatusLine, sub);
+      drawTextCenteredInWidth(m_App->Graph, m_App->Res, menuX, menuW, 216, DEFAULT_FONT_SIZE - 2, m_BootCheckLine,
+                              stackOk ? sub : warn);
+    }
   }
 
   Color hi = {0x44, 0xFF, 0xAA, 0xFF};

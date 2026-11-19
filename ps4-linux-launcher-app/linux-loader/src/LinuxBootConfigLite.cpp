@@ -3,6 +3,8 @@
 
 #include <unistd.h>
 
+#include <ctime>
+
 #include <cerrno>
 #include <cstdio>
 #include <cstring>
@@ -13,6 +15,22 @@
 #include "Utility.h"
 
 static bool pathReadable(const char *p) { return p != nullptr && access(p, R_OK) == 0; }
+
+static bool writeOrbisUtcStamp() {
+  const std::time_t now = std::time(nullptr);
+  if (now <= 0) {
+    return false;
+  }
+  std::string line;
+  Utility::StrSprintf(line, "%lld\n", static_cast<long long>(now));
+  bool ok = Utility::WriteTextFile("/data/linux/boot/ps4-linux-orbis-utc.txt", line);
+  if (!Utility::WriteTextFile("/user/system/boot/ps4-linux-orbis-utc.txt", line)) {
+    APP_LOG_WARN("WriteBootFiles: ps4-linux-orbis-utc not on /user/system/boot");
+  } else {
+    ok = true;
+  }
+  return ok;
+}
 
 int LinuxBootConfig::ClampArchGb(int gb) {
   if (gb < kArchGbMin) {
@@ -246,6 +264,9 @@ bool LinuxBootConfig::WriteBootFiles() const {
   }
   if (!WritePs4NetworkInheritConf()) {
     APP_LOG_WARN("WriteBootFiles: ps4-net-inherit.conf not written (install netdebug may use DHCP)");
+  }
+  if (!writeOrbisUtcStamp()) {
+    APP_LOG_WARN("WriteBootFiles: ps4-linux-orbis-utc.txt not written (install logs may show 1970)");
   }
   if (!Save()) {
     return false;
