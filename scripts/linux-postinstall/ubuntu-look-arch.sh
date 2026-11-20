@@ -12,7 +12,11 @@ fi
 
 echo "=== PS4 Linux — Ubuntu-style desktop (Arch) ==="
 
-pacman -Syu --noconfirm || true
+if [[ "${PS4_SKIP_SYU:-0}" != "1" ]]; then
+  pacman -Syu --noconfirm || true
+else
+  echo "skip: full system upgrade (PS4_SKIP_SYU=1)"
+fi
 
 # GTK / icons / fonts (official + community)
 PACKAGES=(

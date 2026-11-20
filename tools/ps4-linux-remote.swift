@@ -7,6 +7,7 @@
 //   swift tools/ps4-linux-remote.swift exec --host 10.0.1.7 -- uname -a
 //   swift tools/ps4-linux-remote.swift push --host 10.0.1.7 local.txt /tmp/remote.txt
 //   swift tools/ps4-linux-remote.swift pull --host 10.0.1.7 /etc/hostname ./hostname
+//   swift tools/ps4-linux-remote.swift screenshot [--host 10.0.1.7] [out.png]
 import Foundation
 
 struct Cfg {
@@ -205,6 +206,35 @@ func scpPull(_ cfg: Cfg, remote: String, local: String) throws {
     guard st == 0 else { throw NSError(domain: "remote", code: 6, userInfo: [NSLocalizedDescriptionKey: "scp pull failed"]) }
 }
 
+func captureScreenshot(_ cfg: Cfg, output: String) throws {
+    _ = try ensureSSHKey(cfg)
+    let script = cfg.scriptsDir.appendingPathComponent("ps4-hdmi-screenshot.sh")
+    try scpPush(cfg, local: script.path, remote: "/tmp/ps4-hdmi-screenshot.sh")
+    _ = try sh("/usr/bin/ssh", [
+        "-o", "StrictHostKeyChecking=no", "-i", cfg.sshKey.path,
+        "\(cfg.sshUser)@\(cfg.host)", "bash", "/tmp/ps4-hdmi-screenshot.sh",
+    ], timeout: 60)
+    var outURL = URL(fileURLWithPath: output)
+    if !outURL.path.hasPrefix("/") {
+        outURL = URL(fileURLWithPath: FileManager.default.currentDirectoryPath).appendingPathComponent(output)
+    }
+    let rawURL = outURL.deletingPathExtension().appendingPathExtension("raw")
+    try scpPull(cfg, remote: "/tmp/ps4-fb.raw", local: rawURL.path)
+    let x11 = outURL.deletingLastPathComponent().appendingPathComponent("ps4-x11.png")
+    if (try? scpPull(cfg, remote: "/tmp/ps4-x11.png", local: x11.path)) != nil,
+       FileManager.default.fileExists(atPath: x11.path) {
+        try FileManager.default.copyItem(at: x11, to: outURL)
+        print(outURL.path)
+        return
+    }
+    let py = cfg.repoRoot.appendingPathComponent("tools/ps4-linux-fb-to-png.py")
+    let (conv, st) = try sh("/usr/bin/python3", [py.path, rawURL.path, "-o", outURL.path], timeout: 30)
+    guard st == 0 else {
+        throw NSError(domain: "remote", code: 7, userInfo: [NSLocalizedDescriptionKey: "fb→png: \(conv)"])
+    }
+    print(outURL.path)
+}
+
 var cfg = Cfg()
 var cmd = "probe"
 var execArgs: [String] = []
@@ -218,13 +248,13 @@ while i < argv.count {
     case "--port":
         i += 1
         if i < argv.count, let p = Int(argv[i]) { cfg.httpPort = p }
-    case "probe", "setup", "serve", "exec", "push", "pull", "upload-bootstrap":
+    case "probe", "setup", "serve", "exec", "push", "pull", "upload-bootstrap", "screenshot":
         cmd = argv[i]
     case "--":
         execArgs = Array(argv[(i + 1)...])
         i = argv.count
     default:
-        if ["exec", "push", "pull"].contains(cmd), !argv[i].hasPrefix("-") {
+        if ["exec", "push", "pull", "screenshot"].contains(cmd), !argv[i].hasPrefix("-") {
             execArgs.append(argv[i])
         }
         break
@@ -255,6 +285,9 @@ do {
     case "pull":
         guard execArgs.count >= 2 else { fatalError("pull remote local") }
         try scpPull(cfg, remote: execArgs[0], local: execArgs[1])
+    case "screenshot":
+        let out = execArgs.first ?? "tmp/ps4-hdmi-screenshot.png"
+        try captureScreenshot(cfg, output: out)
     default:
         print("""
         Usage:

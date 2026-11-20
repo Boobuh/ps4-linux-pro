@@ -1,0 +1,70 @@
+<?xml version="1.0"?>
+<JWM>
+
+<Desktops width="2" height="2">
+  <Background type="solid">#5C215B</Background>
+  <Desktop name="1"/>
+  <Desktop name="2"/>
+  <Desktop name="3"/>
+  <Desktop name="4"/>
+</Desktops>
+
+<Tray x="0" y="-1" autohide="off" height="28">
+  <TrayButton label="Menu">root:1</TrayButton>
+  <Spacer width="2"/>
+  <TrayButton label="_">showdesktop</TrayButton>
+  <Spacer width="2"/>
+  <TaskList maxwidth="220"/>
+  <Clock format="%H:%M  %a %d %b"/>
+</Tray>
+
+<RootMenu onroot="1" height="16">
+  <Program label="Terminal">xterm</Program>
+  <Program label="Files">pcmanfm</Program>
+  <Separator/>
+  <Restart/>
+  <Exit confirm="false"/>
+</RootMenu>
+
+<WindowStyle>
+  <Width>3</Width>
+  <Height>24</Height>
+  <Foreground>#FFFFFF</Foreground>
+  <Background>#4D1948</Background>
+  <Active>
+    <Foreground>#FFFFFF</Foreground>
+    <Background>#E95420</Background>
+  </Active>
+</WindowStyle>
+
+<TrayStyle>
+  <Background>#300A24</Background>
+  <Foreground>#FFFFFF</Foreground>
+  <Outline>#1A0616</Outline>
+  <Opacity>1.0</Opacity>
+</TrayStyle>
+
+<TaskListStyle>
+  <Foreground>#FFFFFF</Foreground>
+  <Background>#300A24</Background>
+  <Active>
+    <Foreground>#FFFFFF</Foreground>
+    <Background>#5C215B</Background>
+  </Active>
+</TaskListStyle>
+
+<MenuStyle>
+  <Foreground>#FFFFFF</Foreground>
+  <Background>#300A24</Background>
+  <Active>
+    <Foreground>#FFFFFF</Foreground>
+    <Background>#E95420</Background>
+  </Active>
+</MenuStyle>
+
+<ClockStyle>
+  <Foreground>#FFFFFF</Foreground>
+  <Background>#300A24</Background>
+</ClockStyle>
+
+</JWM>

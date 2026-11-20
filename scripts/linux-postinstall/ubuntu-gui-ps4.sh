@@ -15,23 +15,30 @@ if grep -q '^\[ps4\]' /etc/pacman.conf 2>/dev/null; then
 fi
 rm -f /var/lib/pacman/db.lck
 
-if ! pacman-key -l 2>/dev/null | grep -q 'Frederik Schwan'; then
-  cp -a /etc/pacman.conf /etc/pacman.conf.keybootstrap
+# Stale keys / slow Arch.img: avoid blocking gpg keyserver fetch (hangs HDMI session).
+if ! grep -q '^SigLevel = Never' /etc/pacman.conf 2>/dev/null; then
+  cp -a /etc/pacman.conf /etc/pacman.conf.bak-ubuntu-gui
   sed -i 's/^SigLevel.*/SigLevel = Never\nLocalFileSigLevel = Never/' /etc/pacman.conf
-  pacman -Sy --noconfirm
-  yes | pacman -S --noconfirm archlinux-keyring
-  pacman-key --init
-  pacman-key --populate archlinux 2>/dev/null || true
-  mv -f /etc/pacman.conf.keybootstrap /etc/pacman.conf
-  pacman -Sy --noconfirm
 fi
+if [[ ! -s /etc/pacman.d/mirrorlist.ubuntu-gui-bak ]]; then
+  cp -a /etc/pacman.d/mirrorlist /etc/pacman.d/mirrorlist.ubuntu-gui-bak 2>/dev/null || true
+  cat >/etc/pacman.d/mirrorlist <<'MIR'
+Server = https://archive.archlinux.org/repos/2021/09/07/$repo/os/$arch
+Server = https://geo.mirror.pkgbuild.com/$repo/os/$arch
+Server = http://mi.mirror.garr.it/mirrors/archlinux/$repo/os/$arch
+MIR
+fi
+pacman -Sy --noconfirm
 
-# Old psxitarch ships libfm-gtk2/pcmanfm; XFCE pulls libfm-gtk3.
-pacman -Rdd --noconfirm pcmanfm libfm-gtk2 2>/dev/null || true
-# Skip full -Syu. Drop pinned 2021 gstreamer stack so Thunar/XFCE deps can resolve.
-for legacy in gst-plugins-base gst-plugins-good gst-libav parole; do
-  pacman -Rdd --noconfirm "$legacy" 2>/dev/null || true
-done
+DEFER_LEGACY_REMOVE="${DEFER_LEGACY_REMOVE:-1}"
+if [[ "$DEFER_LEGACY_REMOVE" == "0" ]]; then
+  pacman -Rdd --noconfirm pcmanfm libfm-gtk2 2>/dev/null || true
+  for legacy in gst-plugins-base gst-plugins-good gst-libav parole; do
+    pacman -Rdd --noconfirm "$legacy" 2>/dev/null || true
+  done
+else
+  echo "defer: pcmanfm/jwm stay until reboot (DEFER_LEGACY_REMOVE=0 to remove now)"
+fi
 
 XFCE_PKGS=(
   xfce4-session xfwm4 xfdesktop thunar xfce4-panel xfce4-settings xfce4-terminal
@@ -52,11 +59,33 @@ if [[ -f "$LIGHTDM" ]] && ! grep -q '^autologin-user=psxita' "$LIGHTDM"; then
 fi
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-if [[ -x "$SCRIPT_DIR/ubuntu-look-arch.sh" ]]; then
-  bash "$SCRIPT_DIR/ubuntu-look-arch.sh"
-elif [[ -f /tmp/ubuntu-look-arch.sh ]]; then
-  bash /tmp/ubuntu-look-arch.sh
+if [[ -x "$SCRIPT_DIR/ubuntu-xfce-polish-ps4.sh" ]]; then
+  bash "$SCRIPT_DIR/ubuntu-xfce-polish-ps4.sh"
+elif [[ -x /tmp/ubuntu-xfce-polish-ps4.sh ]]; then
+  bash /tmp/ubuntu-xfce-polish-ps4.sh
+elif [[ -x "$SCRIPT_DIR/ubuntu-look-arch.sh" ]]; then
+  PS4_SKIP_SYU=1 bash "$SCRIPT_DIR/ubuntu-look-arch.sh"
 fi
 
-systemctl enable lightdm.service
-echo "=== ubuntu-gui-ps4: done — reboot or: systemctl start lightdm ==="
+systemctl enable lightdm.service 2>/dev/null || true
+# Until LightDM takes tty1, offer XFCE via startx.
+XINIT=/home/psxita/.xinitrc
+if [[ ! -f "${XINIT}.jwm-backup" ]]; then
+  cp -a "$XINIT" "${XINIT}.jwm-backup" 2>/dev/null || echo 'exec /usr/bin/jwm' >"${XINIT}.jwm-backup"
+fi
+cat >"$XINIT" <<'EOF'
+#!/bin/sh
+if command -v startxfce4 >/dev/null 2>&1; then
+  exec dbus-launch --exit-with-session startxfce4
+fi
+exec /usr/bin/jwm
+EOF
+chown psxita:psxita "$XINIT" "${XINIT}.jwm-backup" 2>/dev/null || true
+chmod +x "$XINIT"
+
+if [[ -x /home/psxita/Applications/enable-bluetooth-ps4.sh ]] || [[ -x /usr/local/sbin/enable-bluetooth-ps4.sh ]]; then
+  /usr/local/sbin/enable-bluetooth-ps4.sh psxita 2>/dev/null || true
+fi
+
+echo "=== ubuntu-gui-ps4: done — reboot Linux (recommended) for LightDM; or log out/in for XFCE via startx ==="
+echo "If HDMI goes black: SSH and run  recover-black-screen-ps4.sh"

@@ -48,7 +48,10 @@ swift tools/ps4-linux-remote.swift probe --host 10.0.1.7
 swift tools/ps4-linux-remote.swift exec --host 10.0.1.7 -- systemctl status sshd
 swift tools/ps4-linux-remote.swift push --host 10.0.1.7 ./foo.txt /tmp/foo.txt
 swift tools/ps4-linux-remote.swift pull --host 10.0.1.7 /etc/hostname ./hostname
+swift tools/ps4-linux-remote.swift screenshot --host 10.0.1.7 tmp/ps4-hdmi-screenshot.png
 ```
+
+`screenshot` grabs `/dev/fb0` on the console (what HDMI is driving), pulls the raw buffer, and writes a PNG on the Mac (`tools/ps4-linux-fb-to-png.py`). Use this to verify desktop changes without guessing. Pure black usually means a black HDMI output or DRI bypassing the framebuffer—not necessarily a failed capture.
 
 ## On PS4 OS (optional)
 
