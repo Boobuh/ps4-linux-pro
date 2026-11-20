@@ -8,7 +8,7 @@ systemctl stop ps4-ubuntu-gui-install.service 2>/dev/null || true
 rm -f /var/lib/ps4-ubuntu-gui-installed /var/lib/pacman/db.lck
 pkill -9 pacman gpg 2>/dev/null || true
 
-printf '%s\n' 'exec /usr/bin/jwm' >/home/psxita/.xinitrc
+printf '%s\n' 'exec /usr/bin/jwm -f /home/psxita/.jwmrc-en_US' >/home/psxita/.xinitrc
 chown psxita:psxita /home/psxita/.xinitrc
 ln -sf /home/psxita/.jwmrc-en_US /home/psxita/.jwmrc
 chown -h psxita:psxita /home/psxita/.jwmrc

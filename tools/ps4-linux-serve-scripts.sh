@@ -10,6 +10,8 @@ LAN="$(ipconfig getifaddr en0 2>/dev/null || ipconfig getifaddr en1 2>/dev/null 
 echo "Serving $DIR on http://${LAN}:${PORT}/"
 echo ""
 echo "On PS4 Linux (Terminal), run ONE of:"
+echo "  curl -fsSL \"http://${LAN}:${PORT}/apply-psxitarch-best-practices-ps4.sh\" | sudo PS4_SCRIPT_DIR=/tmp bash"
+echo "  curl -fsSL \"http://${LAN}:${PORT}/rollback-psxitarch-ui-defaults-ps4.sh\" | sudo bash"
 echo "  curl -fsSL \"http://${LAN}:${PORT}/ubuntu-look-arch.sh\" | sudo bash"
 echo "  curl -fsSL \"http://${LAN}:${PORT}/ubuntu-look-one-liner.sh\" | sudo bash"
 echo ""

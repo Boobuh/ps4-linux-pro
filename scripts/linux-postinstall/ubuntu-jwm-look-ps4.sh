@@ -5,7 +5,20 @@ set -euo pipefail
 
 DESKTOP_USER="${DESKTOP_USER:-psxita}"
 UHOME="/home/$DESKTOP_USER"
+BACKUP="$UHOME/.ps4-linux-pro-ui-backup"
 SCRIPT_DIR="${PS4_SCRIPT_DIR:-/tmp}"
+
+# One-time snapshot for rollback-psxitarch-ui-defaults-ps4.sh (before first Ubuntu overwrite).
+if [[ ! -f "$BACKUP/.jwmrc-en_US" ]]; then
+  mkdir -p "$BACKUP"
+  for f in .jwmrc .jwmrc-en_US .jwmrc-de_DE .jwmrc-es_ES .jwmrc-fr_FR .jwmrc-it_IT .xinitrc; do
+    [[ -e "$UHOME/$f" ]] && cp -a "$UHOME/$f" "$BACKUP/" 2>/dev/null || true
+  done
+  if [[ -f "$UHOME/.config/gtk-3.0/settings.ini" ]]; then
+    cp -a "$UHOME/.config/gtk-3.0/settings.ini" "$BACKUP/gtk-3.0-settings.ini"
+  fi
+  chown -R "$DESKTOP_USER:$DESKTOP_USER" "$BACKUP" 2>/dev/null || true
+fi
 WALL_LOCAL="${UBUNTU_WALLPAPER:-${SCRIPT_DIR}/assets/ubuntu-wallpaper.png}"
 JWM_SRC="${JWM_TEMPLATE:-${SCRIPT_DIR}/assets/ubuntu-jwmrc-en_US.xml}"
 BG_DIR="/usr/share/backgrounds/ubuntu"
@@ -46,31 +59,25 @@ fi
 mkdir -p "$UHOME/.config/gtk-3.0"
 cat >"$UHOME/.config/gtk-3.0/settings.ini" <<'EOF'
 [Settings]
-gtk-theme-name=Adapta
-gtk-icon-theme-name=Papirus-Dark
+gtk-theme-name=Adwaita-dark
+gtk-icon-theme-name=Papirus
 gtk-font-name=Ubuntu 11
+gtk-cursor-theme-name=Adwaita
 EOF
 chown -R "$DESKTOP_USER:$DESKTOP_USER" "$UHOME/.config/gtk-3.0"
 
-cat >"$UHOME/.xinitrc" <<'EOF'
+cat >"$UHOME/.xinitrc" <<EOF
 #!/bin/sh
 xset -dpms 2>/dev/null || true
 xset s off 2>/dev/null || true
-exec /usr/bin/jwm
+exec /usr/bin/jwm -f $UHOME/.jwmrc-en_US
 EOF
 chmod +x "$UHOME/.xinitrc"
 chown "$DESKTOP_USER:$DESKTOP_USER" "$UHOME/.xinitrc"
 
-AUTH=$(ls -t /tmp/serverauth.* 2>/dev/null | head -1)
-if [[ -n "$AUTH" ]] && pgrep -u "$DESKTOP_USER" -x jwm >/dev/null 2>&1; then
-  runuser -u "$DESKTOP_USER" -- env DISPLAY=:0 XAUTHORITY="$AUTH" \
-    pcmanfm --desktop --set-wallpaper="$WALL" 2>/dev/null || true
-  runuser -u "$DESKTOP_USER" -- env DISPLAY=:0 XAUTHORITY="$AUTH" jwm -restart 2>/dev/null || true
-else
-  pkill -9 -u "$DESKTOP_USER" jwm Xorg startx 2>/dev/null || true
-  sleep 1
-  rm -f /tmp/.X0-lock 2>/dev/null || true
-  systemctl restart getty@tty1.service
-fi
+pkill -9 -u "$DESKTOP_USER" jwm Xorg startx 2>/dev/null || true
+sleep 1
+rm -f /tmp/.X0-lock 2>/dev/null || true
+systemctl restart getty@tty1.service
 
 echo "=== ubuntu-jwm-look-ps4: wallpaper=$WALL jwmrc restored ==="

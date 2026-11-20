@@ -2,6 +2,8 @@
 
 **Internal agent runbook:** `tmp/docs/PS4-LINUX-INTERNAL-RUNBOOK.md`
 
+**psxitarch desktop policy:** `docs/PS4-PSXITARCH-BEST-PRACTICES.md` — apply with `apply-psxitarch-best-practices-ps4.sh` (JWM Ubuntu path until `Arch.img` is fsck’d).
+
 ## What kept going in circles
 
 | Symptom | We tried | What it actually was |

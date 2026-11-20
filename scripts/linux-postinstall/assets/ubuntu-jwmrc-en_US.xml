@@ -1,61 +1,76 @@
 <?xml version="1.0"?>
 <JWM>
 
+<IconPath>/usr/share/icons/Papirus/16x16/panel</IconPath>
+<IconPath>/usr/share/icons/Papirus/22x22/panel</IconPath>
+<IconPath>/usr/share/jwm</IconPath>
+
 <Desktops width="2" height="2">
-  <Background type="solid">#5C215B</Background>
-  <Desktop name="1"/>
-  <Desktop name="2"/>
-  <Desktop name="3"/>
-  <Desktop name="4"/>
+  <Background type="image">/home/psxita/wallpapers/ubuntu.png</Background>
+  <Desktop name="Workspace 1"/>
+  <Desktop name="Workspace 2"/>
+  <Desktop name="Workspace 3"/>
+  <Desktop name="Workspace 4"/>
 </Desktops>
 
-<Tray x="0" y="-1" autohide="off" height="28">
+<Tray layout="vertical" x="0" y="0" halign="left" valign="top" autohide="off" width="56" height="-1">
   <TrayButton label="Menu">root:1</TrayButton>
-  <Spacer width="2"/>
+  <Spacer height="6"/>
   <TrayButton label="_">showdesktop</TrayButton>
-  <Spacer width="2"/>
-  <TaskList maxwidth="220"/>
-  <Clock format="%H:%M  %a %d %b"/>
+  <Spacer height="6"/>
+  <Pager labeled="true"/>
+  <Spacer height="6"/>
+  <TaskList maxwidth="220" height="0"/>
+  <Spacer height="6"/>
+  <Clock format="%H:%M"/>
 </Tray>
 
-<RootMenu onroot="1" height="16">
-  <Program label="Terminal">xterm</Program>
+<RootMenu onroot="1" width="240" height="20">
   <Program label="Files">pcmanfm</Program>
+  <Program label="Terminal">xterm</Program>
   <Separator/>
-  <Restart/>
-  <Exit confirm="false"/>
+  <Program label="Web browser">firefox</Program>
+  <Separator/>
+  <Restart label="Refresh"/>
+  <Exit confirm="false" label="Log out"/>
 </RootMenu>
 
 <WindowStyle>
-  <Width>3</Width>
-  <Height>24</Height>
+  <Font>Ubuntu-11:bold</Font>
+  <Width>1</Width>
+  <Height>28</Height>
+  <Corner>0</Corner>
   <Foreground>#FFFFFF</Foreground>
-  <Background>#4D1948</Background>
+  <Background>#3B0842</Background>
   <Active>
     <Foreground>#FFFFFF</Foreground>
     <Background>#E95420</Background>
   </Active>
 </WindowStyle>
 
-<TrayStyle>
-  <Background>#300A24</Background>
+<TrayStyle group="true" list="all">
+  <Font>Ubuntu-11</Font>
+  <Background>#2C001E</Background>
   <Foreground>#FFFFFF</Foreground>
-  <Outline>#1A0616</Outline>
+  <Outline>#1A0015</Outline>
   <Opacity>1.0</Opacity>
 </TrayStyle>
 
 <TaskListStyle>
-  <Foreground>#FFFFFF</Foreground>
-  <Background>#300A24</Background>
+  <Font>Ubuntu-10</Font>
   <Active>
     <Foreground>#FFFFFF</Foreground>
-    <Background>#5C215B</Background>
+    <Background>#E95420</Background>
   </Active>
+  <Foreground>#FFFFFF</Foreground>
+  <Background>#2C001E</Background>
 </TaskListStyle>
 
 <MenuStyle>
+  <Font>Ubuntu-11</Font>
   <Foreground>#FFFFFF</Foreground>
-  <Background>#300A24</Background>
+  <Background>#2C001E</Background>
+  <Outline>#000000</Outline>
   <Active>
     <Foreground>#FFFFFF</Foreground>
     <Background>#E95420</Background>
@@ -63,8 +78,20 @@
 </MenuStyle>
 
 <ClockStyle>
+  <Font>Ubuntu-10</Font>
   <Foreground>#FFFFFF</Foreground>
-  <Background>#300A24</Background>
+  <Background>#2C001E</Background>
 </ClockStyle>
+
+<PagerStyle>
+  <Font>Ubuntu-9</Font>
+  <Foreground>#FFFFFF</Foreground>
+  <Background>#2C001E</Background>
+  <Text>#FFFFFF</Text>
+  <Active>
+    <Foreground>#FFFFFF</Foreground>
+    <Background>#5C215B</Background>
+  </Active>
+</PagerStyle>
 
 </JWM>
