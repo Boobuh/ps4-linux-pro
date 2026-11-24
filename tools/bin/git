@@ -1,0 +1,15 @@
+#!/usr/bin/env bash
+# Git wrapper for /Users/Shared cross-user checkouts (avoids dubious ownership).
+set -euo pipefail
+ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
+# Never exec bare "git" — tools/bin may be first on PATH and would recurse forever.
+GIT_BIN="${GIT_REAL_BIN:-}"
+if [[ -z "$GIT_BIN" ]]; then
+  for candidate in /usr/bin/git /opt/homebrew/bin/git /opt/local/bin/git; do
+    [[ -x "$candidate" ]] || continue
+  GIT_BIN="$candidate"
+    break
+  done
+fi
+[[ -n "$GIT_BIN" ]] || { echo "git: no real binary found (set GIT_REAL_BIN)" >&2; exit 127; }
+exec "$GIT_BIN" -c "safe.directory=$ROOT" "$@"
